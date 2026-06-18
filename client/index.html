@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dungeon Crawler</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0b0c10;
+        color: #c7cbd6;
+        font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+        overflow: hidden;
+      }
+      /* The game fills the whole window — no frame, title, or chrome. */
+      #game {
+        position: fixed;
+        inset: 0;
+      }
+      #game canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

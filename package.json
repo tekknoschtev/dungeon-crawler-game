@@ -1,0 +1,16 @@
+{
+  "name": "dungeon-crawler-game",
+  "version": "0.1.0",
+  "description": "Co-op top-down dungeon crawler (Phaser + Colyseus). Milestone 1: synced movement.",
+  "scripts": {
+    "setup": "npm install && npm --prefix server install && npm --prefix client install",
+    "dev": "concurrently -n server,client -c green,cyan \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "build": "npm --prefix server run build && npm --prefix client run build"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3"
+  },
+  "private": true
+}

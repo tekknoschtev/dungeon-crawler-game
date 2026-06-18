@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+**/node_modules/
+
+# build output
+server/dist/
+client/dist/
+
+# logs
+*.log
+npm-debug.log*
+
+# env
+.env
+.env.*
+!.env.example
+
+# raw art sources (extracted packs + the downloaded zips); the resolved
+# images we actually ship live in client/public/assets/ and ARE committed.
+assets-src/
+*.zip
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.suo
+*.user

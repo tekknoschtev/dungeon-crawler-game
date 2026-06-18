@@ -1,0 +1,20 @@
+{
+  "name": "dungeon-crawler-client",
+  "version": "0.1.0",
+  "description": "Phaser client for the co-op dungeon crawler",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@colyseus/sdk": "^0.17.43",
+    "dungeon-crawler-game": "file:..",
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16"
+  }
+}

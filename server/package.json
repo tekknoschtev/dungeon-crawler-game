@@ -1,0 +1,21 @@
+{
+  "name": "dungeon-crawler-server",
+  "version": "0.1.0",
+  "description": "Authoritative Colyseus server for the co-op dungeon crawler",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@colyseus/schema": "^4.0.26",
+    "colyseus": "^0.17.10",
+    "dungeon-crawler-game": "file:.."
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}
