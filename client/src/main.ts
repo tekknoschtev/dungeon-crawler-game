@@ -1,8 +1,9 @@
 import Phaser from "phaser";
 import { GameScene } from "./scenes/GameScene";
+import { UIScene } from "./scenes/UIScene";
 import { VIEW_W, VIEW_H } from "./config";
 
-new Phaser.Game({
+const game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: "game",
   width: VIEW_W,
@@ -14,5 +15,8 @@ new Phaser.Game({
     // shows more or less of the dungeon depending on the window size.
     mode: Phaser.Scale.RESIZE,
   },
-  scene: [GameScene],
+  scene: [GameScene, UIScene],
 });
+
+// Dev-only handle for debugging in the browser console (stripped from prod builds).
+if (import.meta.env.DEV) (window as unknown as { game: Phaser.Game }).game = game;

@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { Client, Room, getStateCallbacks } from "@colyseus/sdk";
 import { SERVER_URL, ROOM_NAME, VIEW_W, VIEW_H, TILE } from "../config";
+import { MoveIntent, MOVE_INTENT_KEY } from "./UIScene";
 
 // Tiny Dungeon art (Kenney, CC0). The packed sheet is 16x16 tiles, 12 columns,
 // no spacing, so a tile's frame index = row * 12 + column. See ATTRIBUTION.md.
@@ -155,6 +156,9 @@ export class GameScene extends Phaser.Scene {
       s: kb.addKey(Phaser.Input.Keyboard.KeyCodes.S),
       d: kb.addKey(Phaser.Input.Keyboard.KeyCodes.D),
     };
+
+    // Parallel scene that feeds touch movement into the registry (mobile).
+    this.scene.launch("ui");
 
     this.connect();
   }
@@ -336,11 +340,14 @@ export class GameScene extends Phaser.Scene {
 
   private sendInput() {
     if (!this.room) return;
+    // Touch joystick intent (from UIScene) is OR'd with the keyboard so either
+    // input source can drive the hero.
+    const move = this.registry.get(MOVE_INTENT_KEY) as MoveIntent | undefined;
     const state: InputState = {
-      up: this.keys.up.isDown || this.keys.w.isDown,
-      down: this.keys.down.isDown || this.keys.s.isDown,
-      left: this.keys.left.isDown || this.keys.a.isDown,
-      right: this.keys.right.isDown || this.keys.d.isDown,
+      up: this.keys.up.isDown || this.keys.w.isDown || !!move?.up,
+      down: this.keys.down.isDown || this.keys.s.isDown || !!move?.down,
+      left: this.keys.left.isDown || this.keys.a.isDown || !!move?.left,
+      right: this.keys.right.isDown || this.keys.d.isDown || !!move?.right,
     };
     const last = this.lastSent;
     if (
