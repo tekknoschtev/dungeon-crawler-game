@@ -1,6 +1,32 @@
-import { Room, Client } from "colyseus";
+import { Room, Client, matchMaker } from "colyseus";
 import { DungeonState, Player } from "./schema/DungeonState";
 import { loadMap, LoadedMap, TILE } from "./map";
+
+// Friendly join codes: 4 chars, no ambiguous glyphs (0/O, 1/I/L). Short enough
+// to read aloud or type on a phone; ~707k combinations is plenty for the handful
+// of rooms ever live at once.
+const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const CODE_LEN = 4;
+const CODE_RE = new RegExp(`^[${CODE_ALPHABET}]{${CODE_LEN}}$`);
+
+function randomCode(): string {
+  let out = "";
+  for (let i = 0; i < CODE_LEN; i++) {
+    out += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
+  }
+  return out;
+}
+
+/** A code not currently used by another live "dungeon" room. */
+async function uniqueCode(): Promise<string> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const code = randomCode();
+    const taken = await matchMaker.query({ name: "dungeon", code });
+    if (taken.length === 0) return code;
+  }
+  // Astronomically unlikely to land here; fall back to a longer-tail candidate.
+  return randomCode();
+}
 
 /** Per-player input held server-side only (never trusted blindly). */
 interface InputState {
@@ -25,8 +51,16 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   private inputs = new Map<string, InputState>();
   private colorIndex = 0;
 
-  onCreate() {
+  async onCreate(options: { code?: string } = {}) {
     this.state = new DungeonState();
+
+    // Shareable join code. Honor a valid client-supplied code (lets a host pick
+    // one); otherwise mint a unique one. filterBy(["code"]) in index.ts routes
+    // `client.join("dungeon", { code })` to the room created with that code.
+    const code =
+      options.code && CODE_RE.test(options.code) ? options.code : await uniqueCode();
+    this.state.code = code;
+    this.setMetadata({ code });
 
     // One random seed per room drives the whole layout. Stored in state so the
     // exact dungeon is reproducible and (later) shareable by code.
@@ -44,10 +78,22 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       input.right = !!message.right;
     });
 
+    // The client requests the map once its renderer is ready (handlers wired),
+    // rather than us pushing it in onJoin — that one-time payload would otherwise
+    // be missed while the client finishes booting (loading art, etc.).
+    this.onMessage("ready", (client) => {
+      client.send("map", {
+        tile: this.map.tile,
+        width: this.map.width,
+        height: this.map.height,
+        grid: this.map.grid,
+      });
+    });
+
     // Fixed-step authoritative simulation. The callback receives delta in ms.
     this.setSimulationInterval((deltaMs) => this.update(deltaMs));
 
-    console.log("DungeonRoom created:", this.roomId);
+    console.log(`DungeonRoom created: ${this.roomId} (code ${code})`);
   }
 
   onJoin(client: Client, options: { name?: string } = {}) {
@@ -62,9 +108,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.state.players.set(client.sessionId, player);
     this.inputs.set(client.sessionId, { up: false, down: false, left: false, right: false });
 
-    // Send the map to this client (server is the source of truth for geometry).
-    client.send("map", { tile: this.map.tile, width: this.map.width, height: this.map.height, grid: this.map.grid });
-
+    // The map is sent when the client signals "ready" (see onCreate), not here.
     console.log(`${player.name} joined (${client.sessionId}). Players: ${this.clients.length}`);
   }
 

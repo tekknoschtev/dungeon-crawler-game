@@ -1,6 +1,6 @@
 import Phaser from "phaser";
-import { Client, Room, getStateCallbacks } from "@colyseus/sdk";
-import { SERVER_URL, ROOM_NAME, VIEW_W, VIEW_H, TILE } from "../config";
+import { Room, getStateCallbacks } from "@colyseus/sdk";
+import { VIEW_W, VIEW_H, TILE } from "../config";
 import { MoveIntent, MOVE_INTENT_KEY } from "./UIScene";
 
 // Tiny Dungeon art (Kenney, CC0). The packed sheet is 16x16 tiles, 12 columns,
@@ -160,24 +160,22 @@ export class GameScene extends Phaser.Scene {
     // Parallel scene that feeds touch movement into the registry (mobile).
     this.scene.launch("ui");
 
-    this.connect();
+    this.setupRoom();
   }
 
-  private async connect() {
-    const client = new Client(SERVER_URL);
-    const name = `Hero-${Math.floor(Math.random() * 1000)}`;
-
-    try {
-      this.room = await client.joinOrCreate(ROOM_NAME, { name });
-    } catch (err) {
-      this.statusText.setText(
-        "Can't reach the server.\nStart it with `npm run dev` in /server,\nthen reload."
-      );
+  /**
+   * Render the room the lobby already connected (stashed in the registry). The
+   * lobby owns matchmaking (create / join-by-code); this scene just renders the
+   * resulting room's state.
+   */
+  private setupRoom() {
+    const room = this.registry.get("room") as Room | undefined;
+    if (!room) {
+      this.statusText.setText("No room to join.\nReload to return to the menu.");
       this.statusText.setAlign("center");
-      console.error("Join failed:", err);
       return;
     }
-
+    this.room = room;
     this.statusText.setVisible(false);
 
     this.room.onMessage<MapMessage>("map", (data) => this.buildMap(data));
@@ -213,6 +211,10 @@ export class GameScene extends Phaser.Scene {
       this.statusText.setText("Disconnected.\nReload to rejoin.");
       this.statusText.setAlign("center").setVisible(true);
     });
+
+    // Now that the map handler (and the rest) are wired, ask the server for the
+    // map. Doing this here — after boot — avoids missing the one-time payload.
+    this.room.send("ready");
   }
 
   private addEntity(player: PlayerView, sessionId: string, isLocal: boolean) {

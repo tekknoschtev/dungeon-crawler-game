@@ -8,7 +8,9 @@ const gameServer = new Server({
 });
 
 // Register our room under the name the client joins ("dungeon").
-gameServer.define("dungeon", DungeonRoom);
+// filterBy(["code"]) makes matchmaking route `client.join("dungeon", { code })`
+// to the room that was created with that exact code.
+gameServer.define("dungeon", DungeonRoom).filterBy(["code"]);
 
 gameServer.listen(PORT);
 console.log(`⚔️  Dungeon server listening on ws://localhost:${PORT}`);
