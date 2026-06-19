@@ -9,6 +9,7 @@ import {
   playerAttackDamage,
   mobDamageAfterDefense,
   regenHp,
+  isAllowedColor,
   pickAggroTarget,
   type LootTarget,
   type LootBuffs,
@@ -144,6 +145,24 @@ describe("regenHp", () => {
     // Default rate is positive, so a wounded hero gains some HP.
     expect(regenHp(50, 100, 1)).toBeGreaterThan(50);
     expect(regenHp(50, 100, 1)).toBeLessThanOrEqual(100);
+  });
+});
+
+describe("isAllowedColor", () => {
+  const palette = ["#ff5d73", "#4ec9ff", "#ffd65c"];
+
+  it("accepts a color in the palette", () => {
+    expect(isAllowedColor("#4ec9ff", palette)).toBe(true);
+  });
+
+  it("rejects a color not in the palette", () => {
+    expect(isAllowedColor("#123456", palette)).toBe(false);
+  });
+
+  it("rejects undefined and junk (allowlist, not just a type check)", () => {
+    expect(isAllowedColor(undefined, palette)).toBe(false);
+    expect(isAllowedColor("red", palette)).toBe(false);
+    expect(isAllowedColor("javascript:alert(1)", palette)).toBe(false);
   });
 });
 

@@ -29,6 +29,7 @@ import {
   playerAttackDamage,
   mobDamageAfterDefense,
   regenHp,
+  isAllowedColor,
   pickAggroTarget,
   type AggroCandidate,
 } from "./logic";
@@ -83,7 +84,9 @@ interface MobAI {
   wanderDy: number;
 }
 
-// Distinct hero colors handed out round-robin as players join.
+// Distinct hero colors. Players pick one in the lobby (validated against this
+// allowlist); unrecognised/absent picks fall back to round-robin assignment.
+// The client lobby mirrors this list (HERO_COLORS in lobby.ts) — keep them in sync.
 const COLORS = ["#ff5d73", "#4ec9ff", "#ffd65c", "#7cf36b", "#c08bff", "#ff9f45"];
 
 export class DungeonRoom extends Room<{ state: DungeonState }> {
@@ -162,15 +165,21 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     console.log(`DungeonRoom created: ${this.roomId} (code ${code})`);
   }
 
-  onJoin(client: Client, options: { name?: string } = {}) {
+  onJoin(client: Client, options: { name?: string; color?: string } = {}) {
     const player = new Player();
     const spawn = this.map.spawns[this.clients.length % this.map.spawns.length];
     player.x = spawn.x;
     player.y = spawn.y;
     player.hp = PLAYER_MAX_HP;
     player.maxHp = PLAYER_MAX_HP;
-    player.color = COLORS[this.colorIndex % COLORS.length];
-    this.colorIndex++;
+    // Honor the lobby's color pick if it's a known one; otherwise hand out the
+    // next round-robin color (advancing the cursor only when we actually use it).
+    if (isAllowedColor(options.color, COLORS)) {
+      player.color = options.color!;
+    } else {
+      player.color = COLORS[this.colorIndex % COLORS.length];
+      this.colorIndex++;
+    }
     player.name = (options.name && options.name.trim().slice(0, 16)) || `Hero ${this.clients.length}`;
 
     this.state.players.set(client.sessionId, player);

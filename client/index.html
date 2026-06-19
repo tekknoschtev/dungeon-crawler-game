@@ -137,6 +137,35 @@
       #create[hidden] {
         display: none;
       }
+      /* Hero color picker (lobby): a live, tinted hero sprite you arrow through. */
+      .picker-label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .hero-picker {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+      .hero-arrow {
+        width: 38px;
+        height: 38px;
+        font-size: 20px;
+        line-height: 1;
+        padding: 0;
+      }
+      .hero-canvas {
+        width: 72px;
+        height: 72px;
+        image-rendering: pixelated;
+        background: #0e1016;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
       .joinrow {
         display: flex;
         gap: 8px;
@@ -352,6 +381,12 @@
           Name
           <input id="name" maxlength="16" autocomplete="off" />
         </label>
+        <span class="picker-label">Hero color</span>
+        <div class="hero-picker">
+          <button id="hero-prev" class="hero-arrow" type="button" aria-label="Previous color">‹</button>
+          <canvas id="hero-canvas" class="hero-canvas" width="72" height="72" aria-label="Hero preview"></canvas>
+          <button id="hero-next" class="hero-arrow" type="button" aria-label="Next color">›</button>
+        </div>
         <button id="create" class="primary">Create Room</button>
         <div id="ordivider" class="divider">— or join with a code —</div>
         <div class="joinrow">

@@ -142,6 +142,17 @@ export function mobDamageAfterDefense(defenseBuffActive: boolean, defenseReduce:
   return MOB_DAMAGE * (1 - (defenseBuffActive ? defenseReduce : 0));
 }
 
+// --- Cosmetics ---------------------------------------------------------
+
+/**
+ * True if `color` is one of the allowed hero colors. Used to vet the client's
+ * lobby pick before it's stored/broadcast — an allowlist, so a hand-crafted
+ * client can't smuggle an arbitrary string into the synced `Player.color`.
+ */
+export function isAllowedColor(color: string | undefined, palette: readonly string[]): boolean {
+  return color !== undefined && palette.includes(color);
+}
+
 // --- Passive regen -----------------------------------------------------
 
 /**
