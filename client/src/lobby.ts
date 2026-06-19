@@ -7,6 +7,22 @@ import { SERVER_URL, ROOM_NAME, VIEW_W, VIEW_H } from "./config";
 // Friendly join code shape — must match the server (DungeonRoom CODE_ALPHABET).
 const CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}$/;
 
+// Hero color palette — mirrors the server's COLORS (DungeonRoom). The server
+// validates the pick against its own allowlist and falls back to round-robin for
+// anything it doesn't recognise, so keep these two lists in sync.
+const HERO_COLORS = ["#ff5d73", "#4ec9ff", "#ffd65c", "#7cf36b", "#c08bff", "#ff9f45"];
+// Start on a random color so a room full of defaults isn't all one color.
+let colorIndex = Math.floor(Math.random() * HERO_COLORS.length);
+let selectedColor = HERO_COLORS[colorIndex];
+
+// Hero sprite location in the Tiny Dungeon sheet — mirrors GameScene
+// (FRAME_HERO = 96 on a 12-col, 16px sheet → row 8, col 0). Tinting here
+// replicates Phaser's multiply tint so the lobby preview matches in-game.
+const SHEET_SRC = "/assets/tiny-dungeon/tilemap_packed.png";
+const SHEET_COLS = 12;
+const TILE_SRC = 16;
+const FRAME_HERO = 96;
+
 const client = new Client(SERVER_URL);
 // Dev-only console handle for debugging matchmaking (stripped from prod builds).
 if (import.meta.env.DEV) (window as unknown as { colyseus: Client }).colyseus = client;
@@ -38,6 +54,8 @@ export function startLobby() {
   const joinBtn = $<HTMLButtonElement>("join");
 
   nameInput.value = `Hero-${Math.floor(Math.random() * 1000)}`;
+
+  setupHeroPicker();
 
   // Force the code field to the canonical uppercase alphabet as the user types.
   codeInput.addEventListener("input", () => {
@@ -82,11 +100,64 @@ function playerName(raw: string): string {
   return raw.trim().slice(0, 16) || `Hero-${Math.floor(Math.random() * 1000)}`;
 }
 
+/**
+ * Wire the hero preview + arrow buttons. The hero sprite is drawn to a canvas
+ * and tinted with the current color (multiply, matching Phaser's setTint), and
+ * the arrows cycle `selectedColor` through HERO_COLORS.
+ */
+function setupHeroPicker() {
+  const canvas = $<HTMLCanvasElement>("hero-canvas");
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  const sheet = new Image();
+  const sx = (FRAME_HERO % SHEET_COLS) * TILE_SRC;
+  const sy = Math.floor(FRAME_HERO / SHEET_COLS) * TILE_SRC;
+
+  const render = () => {
+    const d = canvas.width; // square; scaled-up hero fills the canvas
+    ctx.clearRect(0, 0, d, d);
+    if (!sheet.complete || sheet.naturalWidth === 0) return;
+    ctx.imageSmoothingEnabled = false;
+    // 1) the hero frame, 2) multiply the tint over it, 3) clip back to the
+    // sprite's alpha so the fill doesn't leak onto the transparent background.
+    ctx.globalCompositeOperation = "source-over";
+    ctx.drawImage(sheet, sx, sy, TILE_SRC, TILE_SRC, 0, 0, d, d);
+    ctx.globalCompositeOperation = "multiply";
+    ctx.fillStyle = selectedColor;
+    ctx.fillRect(0, 0, d, d);
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.drawImage(sheet, sx, sy, TILE_SRC, TILE_SRC, 0, 0, d, d);
+    ctx.globalCompositeOperation = "source-over";
+  };
+
+  const cycle = (step: number) => {
+    colorIndex = (colorIndex + step + HERO_COLORS.length) % HERO_COLORS.length;
+    selectedColor = HERO_COLORS[colorIndex];
+    render();
+  };
+
+  $<HTMLButtonElement>("hero-prev").addEventListener("click", () => cycle(-1));
+  $<HTMLButtonElement>("hero-next").addEventListener("click", () => cycle(1));
+  // Arrow keys cycle too — but only while the lobby is open (once the game
+  // starts, arrows drive the hero) and not while typing in a field.
+  const menu = $<HTMLDivElement>("menu");
+  document.addEventListener("keydown", (e) => {
+    if (menu.hidden || document.activeElement instanceof HTMLInputElement) return;
+    if (e.key === "ArrowLeft") cycle(-1);
+    else if (e.key === "ArrowRight") cycle(1);
+  });
+
+  sheet.onload = render;
+  sheet.src = SHEET_SRC;
+  render(); // in case it's cached and already complete
+}
+
 async function createRoom(name: string) {
   if (busy) return;
   setBusy(true);
   try {
-    const room = await client.create(ROOM_NAME, { name: playerName(name) });
+    const room = await client.create(ROOM_NAME, { name: playerName(name), color: selectedColor });
     enterGame(room);
   } catch (err) {
     console.error("Create failed:", err);
@@ -104,7 +175,7 @@ async function joinRoom(name: string, rawCode: string) {
   }
   setBusy(true);
   try {
-    const room = await client.join(ROOM_NAME, { name: playerName(name), code });
+    const room = await client.join(ROOM_NAME, { name: playerName(name), code, color: selectedColor });
     enterGame(room);
   } catch (err) {
     console.error("Join failed:", err);
