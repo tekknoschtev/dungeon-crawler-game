@@ -297,9 +297,9 @@ export class GameScene extends Phaser.Scene {
       $(player).onChange(() => {
         const e = this.entities.get(sessionId);
         if (e) {
-          // Alive -> dead transition for a teammate: announce it. (Our own death
-          // shows the center overlay below, so skip self to avoid redundancy.)
-          if (!isLocal && e.hp > 0 && player.hp <= 0) this.showToast(player.name, "death");
+          // Alive -> dead transition: announce every hero's death in the feed,
+          // including our own (which also still shows the center overlay below).
+          if (e.hp > 0 && player.hp <= 0) this.showToast(player.name, "death");
           e.target.x = player.x;
           e.target.y = player.y;
           e.hp = player.hp;
