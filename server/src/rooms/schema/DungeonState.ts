@@ -28,6 +28,10 @@ export class Mob extends Schema {
   @type("number") hp: number = 30;
   @type("number") maxHp: number = 30;
   @type("string") kind: string = "slime";
+  // Bumped once each time the mob lands a hit (wraps at 256). Clients watch for
+  // the change to fire a one-shot strike animation — cheaper than a ticking
+  // timer, which would re-encode every tick for every attacking mob.
+  @type("uint8") attackTick: number = 0;
 }
 
 /** A loot drop sitting on the floor until a player walks over it. */
