@@ -69,12 +69,51 @@ const LABEL_OFFSET = 10; // world px above the hero's center
 // World tiles/hero sit low; HUD (status text) sits on top.
 const HUD_DEPTH = 1000;
 
-/** Shape of a player as decoded on the client (mirrors the server schema). */
+// --- Combat + loot (M3 / M4) -------------------------------------------
+const FRAME_SLIME = 108; // Tiny Dungeon green slime
+const MOB_DEPTH = 8; // mobs render just under heroes (depth 10)
+const LOOT_DEPTH = 5;
+const LOOT_GLOW_DEPTH = 4;
+const ATTACK_COOLDOWN_MS = 450; // client throttle; mirrors the server cooldown
+const SWING_RADIUS = 26; // world px of the local swing ring (feedback only)
+
+// Rarity → accent color (loot glow + HUD).
+const RARITY_COLORS: Record<string, number> = {
+  common: 0xb8c0cc,
+  uncommon: 0x7cf36b,
+  rare: 0x4ec9ff,
+  epic: 0xc08bff,
+  legendary: 0xffb028,
+};
+
+/** Shapes decoded on the client (mirror the server schema). */
 interface PlayerView {
   x: number;
   y: number;
   name: string;
   color: string;
+  hp: number;
+  maxHp: number;
+  lootCommon: number;
+  lootUncommon: number;
+  lootRare: number;
+  lootEpic: number;
+  lootLegendary: number;
+}
+
+interface MobView {
+  x: number;
+  y: number;
+  hp: number;
+  maxHp: number;
+  kind: string;
+}
+
+interface LootView {
+  x: number;
+  y: number;
+  rarity: string;
+  kind: number; // sprite-sheet frame index
 }
 
 interface MapMessage {
@@ -88,7 +127,23 @@ interface MapMessage {
 interface Entity {
   sprite: Phaser.GameObjects.Image;
   label: Phaser.GameObjects.Text;
+  hpBar: Phaser.GameObjects.Graphics;
   target: { x: number; y: number };
+  hp: number;
+  maxHp: number;
+}
+
+interface MobEntity {
+  sprite: Phaser.GameObjects.Image;
+  hpBar: Phaser.GameObjects.Graphics;
+  target: { x: number; y: number };
+  hp: number;
+  maxHp: number;
+}
+
+interface LootEntity {
+  sprite: Phaser.GameObjects.Image;
+  glow: Phaser.GameObjects.Arc;
 }
 
 interface InputState {
@@ -101,6 +156,9 @@ interface InputState {
 export class GameScene extends Phaser.Scene {
   private room?: Room;
   private entities = new Map<string, Entity>();
+  private mobs = new Map<string, MobEntity>();
+  private loot = new Map<string, LootEntity>();
+  private localId = "";
 
   private mapLayer!: Phaser.GameObjects.Container;
   private statusText!: Phaser.GameObjects.Text;
@@ -114,8 +172,11 @@ export class GameScene extends Phaser.Scene {
     a: Phaser.Input.Keyboard.Key;
     s: Phaser.Input.Keyboard.Key;
     d: Phaser.Input.Keyboard.Key;
+    space: Phaser.Input.Keyboard.Key;
   };
   private lastSent: InputState = { up: false, down: false, left: false, right: false };
+  private lastAttackAt = 0; // client-side attack throttle (ms)
+  private attackRequested = false; // set by the touch attack button (UIScene)
 
   constructor() {
     super("game");
@@ -155,12 +216,25 @@ export class GameScene extends Phaser.Scene {
       a: kb.addKey(Phaser.Input.Keyboard.KeyCodes.A),
       s: kb.addKey(Phaser.Input.Keyboard.KeyCodes.S),
       d: kb.addKey(Phaser.Input.Keyboard.KeyCodes.D),
+      space: kb.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE),
     };
+    kb.addCapture("SPACE"); // don't let Space scroll/trigger page defaults
 
     // Parallel scene that feeds touch movement into the registry (mobile).
     this.scene.launch("ui");
 
+    // Attack: Space (above) on desktop, or the UIScene touch button, which fires
+    // a game-level "attack" event so UIScene stays Colyseus-free.
+    this.game.events.on("attack", this.onAttackRequest, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.game.events.off("attack", this.onAttackRequest, this);
+    });
+
     this.setupRoom();
+  }
+
+  private onAttackRequest() {
+    this.attackRequested = true;
   }
 
   /**
@@ -180,28 +254,59 @@ export class GameScene extends Phaser.Scene {
 
     this.room.onMessage<MapMessage>("map", (data) => this.buildMap(data));
 
+    this.localId = this.room.sessionId;
     const $ = getStateCallbacks(this.room);
-    const players = $(this.room.state as { players: Map<string, PlayerView> }).players;
+    const state = this.room.state as {
+      players: Map<string, PlayerView>;
+      mobs: Map<string, MobView>;
+      loot: Map<string, LootView>;
+    };
 
-    players.onAdd((player: PlayerView, sessionId: string) => {
-      this.addEntity(player, sessionId, sessionId === this.room!.sessionId);
+    $(state).players.onAdd((player: PlayerView, sessionId: string) => {
+      const isLocal = sessionId === this.localId;
+      this.addEntity(player, sessionId, isLocal);
+      if (isLocal) this.updateHud(player);
       $(player).onChange(() => {
         const e = this.entities.get(sessionId);
         if (e) {
           e.target.x = player.x;
           e.target.y = player.y;
+          e.hp = player.hp;
+          e.maxHp = player.maxHp;
+        }
+        if (isLocal) {
+          this.updateHud(player);
+          this.setDeathOverlay(player.hp <= 0);
         }
       });
     });
 
-    players.onRemove((_player: PlayerView, sessionId: string) => {
+    $(state).players.onRemove((_player: PlayerView, sessionId: string) => {
       const e = this.entities.get(sessionId);
       if (e) {
         e.sprite.destroy();
         e.label.destroy();
+        e.hpBar.destroy();
         this.entities.delete(sessionId);
       }
     });
+
+    $(state).mobs.onAdd((mob: MobView, id: string) => {
+      this.addMob(mob, id);
+      $(mob).onChange(() => {
+        const m = this.mobs.get(id);
+        if (m) {
+          m.target.x = mob.x;
+          m.target.y = mob.y;
+          m.hp = mob.hp;
+          m.maxHp = mob.maxHp;
+        }
+      });
+    });
+    $(state).mobs.onRemove((_mob: MobView, id: string) => this.removeMob(id));
+
+    $(state).loot.onAdd((l: LootView, id: string) => this.addLoot(l, id));
+    $(state).loot.onRemove((_l: LootView, id: string) => this.removeLoot(id));
 
     this.room.onError((code, message) => {
       console.error("Room error:", code, message);
@@ -236,10 +341,15 @@ export class GameScene extends Phaser.Scene {
       .setScale(1 / CAMERA_ZOOM)
       .setDepth(20);
 
+    const hpBar = this.add.graphics().setDepth(11);
+
     this.entities.set(sessionId, {
       sprite,
       label,
+      hpBar,
       target: { x: player.x, y: player.y },
+      hp: player.hp,
+      maxHp: player.maxHp,
     });
 
     // The camera follows the local hero through the world.
@@ -248,6 +358,143 @@ export class GameScene extends Phaser.Scene {
       cam.setZoom(CAMERA_ZOOM);
       cam.startFollow(sprite, true, CAMERA_LERP, CAMERA_LERP);
       this.centerStatus(); // zoom changed; keep the HUD text crisp + centered
+    }
+  }
+
+  // --- Mobs + loot rendering ---------------------------------------------
+
+  private addMob(mob: MobView, id: string) {
+    const sprite = this.add
+      .image(mob.x, mob.y, TILES_KEY, FRAME_SLIME)
+      .setDisplaySize(TILE, TILE)
+      .setDepth(MOB_DEPTH);
+    const hpBar = this.add.graphics().setDepth(MOB_DEPTH + 1);
+    this.mobs.set(id, {
+      sprite,
+      hpBar,
+      target: { x: mob.x, y: mob.y },
+      hp: mob.hp,
+      maxHp: mob.maxHp,
+    });
+  }
+
+  private removeMob(id: string) {
+    const m = this.mobs.get(id);
+    if (!m) return;
+    m.sprite.destroy();
+    m.hpBar.destroy();
+    this.mobs.delete(id);
+  }
+
+  private addLoot(l: LootView, id: string) {
+    const color = RARITY_COLORS[l.rarity] ?? RARITY_COLORS.common;
+    const glow = this.add
+      .circle(l.x, l.y, 9, color, 0.5)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(LOOT_GLOW_DEPTH);
+    const sprite = this.add
+      .image(l.x, l.y, TILES_KEY, l.kind)
+      .setDisplaySize(TILE, TILE)
+      .setDepth(LOOT_DEPTH);
+    // Gentle pulse so drops read as "shiny", brighter the rarer they are.
+    this.tweens.add({
+      targets: glow,
+      scale: 1.35,
+      alpha: 0.25,
+      duration: 700,
+      yoyo: true,
+      repeat: -1,
+    });
+    this.loot.set(id, { sprite, glow });
+  }
+
+  private removeLoot(id: string) {
+    const l = this.loot.get(id);
+    if (!l) return;
+    // Small pop on pickup, then clean up.
+    this.tweens.add({
+      targets: [l.sprite, l.glow],
+      scale: 1.7,
+      alpha: 0,
+      duration: 180,
+      onComplete: () => {
+        l.sprite.destroy();
+        l.glow.destroy();
+      },
+    });
+    this.loot.delete(id);
+  }
+
+  /** Redraw a small floating HP bar above an entity (hidden when full or dead). */
+  private drawHpBar(g: Phaser.GameObjects.Graphics, x: number, y: number, hp: number, maxHp: number) {
+    g.clear();
+    if (hp >= maxHp || hp <= 0) return;
+    const w = 12;
+    const h = 2;
+    const bx = x - w / 2;
+    const by = y - TILE / 2 - 5;
+    const frac = Math.max(0, Math.min(1, hp / maxHp));
+    g.fillStyle(0x000000, 0.6);
+    g.fillRect(bx - 1, by - 1, w + 2, h + 2);
+    g.fillStyle(0x3a3f4b, 1);
+    g.fillRect(bx, by, w, h);
+    const col = frac > 0.5 ? 0x7cf36b : frac > 0.25 ? 0xffd65c : 0xff5d73;
+    g.fillStyle(col, 1);
+    g.fillRect(bx, by, w * frac, h);
+  }
+
+  // --- Combat input + feedback -------------------------------------------
+
+  private handleAttackInput(time: number) {
+    const want = this.keys.space.isDown || this.attackRequested;
+    this.attackRequested = false;
+    if (!want || !this.room) return;
+    const me = this.entities.get(this.localId);
+    if (me && me.hp <= 0) return; // no attacking while dead
+    if (time - this.lastAttackAt < ATTACK_COOLDOWN_MS) return;
+    this.lastAttackAt = time;
+    this.room.send("attack");
+    if (me) this.showSwing(me.sprite.x, me.sprite.y);
+  }
+
+  /** A quick expanding ring at the hero for attack feedback. */
+  private showSwing(x: number, y: number) {
+    const ring = this.add
+      .circle(x, y, SWING_RADIUS, 0xffffff, 0)
+      .setStrokeStyle(2, 0xffffff, 0.85)
+      .setDepth(15);
+    this.tweens.add({
+      targets: ring,
+      scale: 1.5,
+      alpha: 0,
+      duration: 200,
+      onComplete: () => ring.destroy(),
+    });
+  }
+
+  // --- HUD (DOM) ---------------------------------------------------------
+
+  private updateHud(p: PlayerView) {
+    const hud = document.getElementById("hud");
+    if (hud) hud.hidden = false;
+    const fill = document.getElementById("hud-hp-fill");
+    if (fill) fill.style.width = `${Math.max(0, Math.min(100, (p.hp / p.maxHp) * 100))}%`;
+    const set = (id: string, n: number) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = String(n);
+    };
+    set("loot-common", p.lootCommon);
+    set("loot-uncommon", p.lootUncommon);
+    set("loot-rare", p.lootRare);
+    set("loot-epic", p.lootEpic);
+    set("loot-legendary", p.lootLegendary);
+  }
+
+  private setDeathOverlay(dead: boolean) {
+    if (dead) {
+      this.statusText.setText("You died…\nrespawning").setAlign("center").setVisible(true);
+    } else {
+      this.statusText.setVisible(false);
     }
   }
 
@@ -326,8 +573,9 @@ export class GameScene extends Phaser.Scene {
     return cell;
   }
 
-  update(_time: number, delta: number) {
+  update(time: number, delta: number) {
     this.sendInput();
+    this.handleAttackInput(time);
 
     // Smoothly interpolate every entity toward its authoritative position.
     // Frame-rate independent lerp factor.
@@ -337,6 +585,12 @@ export class GameScene extends Phaser.Scene {
       e.sprite.y = Phaser.Math.Linear(e.sprite.y, e.target.y, k);
       e.label.x = e.sprite.x;
       e.label.y = e.sprite.y - LABEL_OFFSET;
+      this.drawHpBar(e.hpBar, e.sprite.x, e.sprite.y, e.hp, e.maxHp);
+    });
+    this.mobs.forEach((m) => {
+      m.sprite.x = Phaser.Math.Linear(m.sprite.x, m.target.x, k);
+      m.sprite.y = Phaser.Math.Linear(m.sprite.y, m.target.y, k);
+      this.drawHpBar(m.hpBar, m.sprite.x, m.sprite.y, m.hp, m.maxHp);
     });
   }
 
