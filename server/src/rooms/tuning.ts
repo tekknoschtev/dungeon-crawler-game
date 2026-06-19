@@ -17,6 +17,11 @@ export const PLAYER_ATTACK_DAMAGE = 12;
 export const PLAYER_ATTACK_RANGE = 24; // px radius of the (omnidirectional) melee swing
 export const PLAYER_ATTACK_COOLDOWN = 0.45; // s
 export const RESPAWN_DELAY = 3; // s
+// Slow passive heal while alive, so heroes recover between fights without making
+// potions pointless. At 1.5 HP/s a full heal from near-death takes ~over a
+// minute — negligible mid-fight (a slime does 8/s), meaningful during a lull.
+// This is the main knob to dial after playtesting.
+export const PASSIVE_REGEN = 1.5; // HP/s
 
 // --- Mobs --------------------------------------------------------------
 export const MOB_MAX_HP = 30;
@@ -31,7 +36,7 @@ export const MOB_RESPAWN_INTERVAL = 4; // s between top-up spawns
 
 // --- Loot --------------------------------------------------------------
 export const PICKUP_RANGE = 14; // px — auto-collect radius
-export const BUFF_DURATION = 6; // s — attack/defense buff length
+export const BUFF_DURATION = 9; // s — attack/defense buff length (longer: rarer drops, so each lasts)
 export const HEAL_PCT = 0.4; // fraction of max HP restored per quaffed potion
 export const MAX_HEAL_CHARGES = 5; // how many heal potions a hero can stockpile
 
@@ -44,22 +49,26 @@ export interface Rarity {
 
 // Loot rarity: drop weight + how strongly it scales the attack/defense buffs.
 // (Heals are a flat % and stack, so rarity no longer affects them.)
+// Potency bumped alongside the rarer drop rates (see CATEGORIES) so the buffs
+// you do find feel worth the wait.
 export const RARITIES: Rarity[] = [
-  { name: "common", weight: 60, attackMult: 1.4, defenseReduce: 0.2 },
-  { name: "uncommon", weight: 25, attackMult: 1.7, defenseReduce: 0.35 },
-  { name: "rare", weight: 10, attackMult: 2.0, defenseReduce: 0.5 },
-  { name: "epic", weight: 4, attackMult: 2.3, defenseReduce: 0.6 },
-  { name: "legendary", weight: 1, attackMult: 2.6, defenseReduce: 0.7 },
+  { name: "common", weight: 60, attackMult: 1.6, defenseReduce: 0.25 },
+  { name: "uncommon", weight: 25, attackMult: 1.9, defenseReduce: 0.4 },
+  { name: "rare", weight: 10, attackMult: 2.2, defenseReduce: 0.55 },
+  { name: "epic", weight: 4, attackMult: 2.5, defenseReduce: 0.65 },
+  { name: "legendary", weight: 1, attackMult: 2.8, defenseReduce: 0.75 },
 ];
 export const RARITY_TOTAL = RARITIES.reduce((sum, r) => sum + r.weight, 0);
 export const rarityByName = (name: string): Rarity =>
   RARITIES.find((r) => r.name === name) ?? RARITIES[0];
 
-// Loot categories: attack/defense a touch more common than heal, so heals feel
-// like the prize you ration.
+// Loot categories: heals are now the common drop (heroes can quaff freely),
+// while attack/defense buffs are the rarer prize — offset by longer, stronger
+// buffs (see BUFF_DURATION and RARITIES). Keep "attack" first and "heal" last:
+// logic.test.ts pins rollCategory's bottom/top buckets to that order.
 export const CATEGORIES = [
-  { name: "attack", weight: 40 },
-  { name: "defense", weight: 40 },
-  { name: "heal", weight: 30 },
+  { name: "attack", weight: 20 },
+  { name: "defense", weight: 20 },
+  { name: "heal", weight: 60 },
 ];
 export const CATEGORY_TOTAL = CATEGORIES.reduce((sum, c) => sum + c.weight, 0);

@@ -8,6 +8,7 @@ import {
   applyLootEffect,
   playerAttackDamage,
   mobDamageAfterDefense,
+  regenHp,
   pickAggroTarget,
   type LootTarget,
   type LootBuffs,
@@ -123,6 +124,26 @@ describe("combat damage", () => {
     expect(mobDamageAfterDefense(false, 0.5)).toBe(MOB_DAMAGE);
     expect(mobDamageAfterDefense(true, 0.5)).toBe(MOB_DAMAGE * 0.5);
     expect(mobDamageAfterDefense(true, 0)).toBe(MOB_DAMAGE);
+  });
+});
+
+describe("regenHp", () => {
+  it("heals at the given rate over dt", () => {
+    expect(regenHp(50, 100, 2, 1.5)).toBe(53); // 50 + 1.5*2
+  });
+
+  it("clamps at maxHp (no overheal)", () => {
+    expect(regenHp(99, 100, 10, 1.5)).toBe(100);
+  });
+
+  it("is a no-op when already at full HP", () => {
+    expect(regenHp(100, 100, 5, 1.5)).toBe(100);
+  });
+
+  it("uses the PASSIVE_REGEN default rate when none is passed", () => {
+    // Default rate is positive, so a wounded hero gains some HP.
+    expect(regenHp(50, 100, 1)).toBeGreaterThan(50);
+    expect(regenHp(50, 100, 1)).toBeLessThanOrEqual(100);
   });
 });
 
