@@ -13,9 +13,11 @@
   "dependencies": {
     "@colyseus/schema": "^4.0.26",
     "colyseus": "^0.17.10",
-    "dungeon-crawler-game": "file:.."
+    "dungeon-crawler-game": "file:..",
+    "express": "^5.1.0"
   },
   "devDependencies": {
+    "@types/express": "^5.0.0",
     "@types/node": "^25.9.3",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",

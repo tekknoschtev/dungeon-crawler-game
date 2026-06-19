@@ -1,0 +1,18 @@
+[Unit]
+Description=Dungeon Crawler (Colyseus server + bundled client)
+After=network.target
+
+[Service]
+Type=simple
+User=dungeon
+# clientDist is resolved from __dirname (absolute), so cwd doesn't matter, but
+# keep it at the server package for predictable relative paths.
+WorkingDirectory=/opt/dungeon/server
+Environment=NODE_ENV=production
+Environment=PORT=2567
+ExecStart=/usr/bin/node /opt/dungeon/server/dist/index.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
