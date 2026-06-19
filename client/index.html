@@ -294,6 +294,50 @@
       .chip.empty b {
         opacity: 0.4;
       }
+
+      /* --- Transient toasts: a hero joins or leaves the dungeon --- */
+      #toasts {
+        position: fixed;
+        top: 8px;
+        right: 8px;
+        z-index: 11;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        align-items: flex-end;
+        pointer-events: none;
+      }
+      .toast {
+        padding: 6px 12px;
+        background: rgba(21, 23, 31, 0.9);
+        border: 1px solid var(--line);
+        border-left-width: 3px;
+        border-radius: 8px;
+        font-size: 13px;
+        color: var(--text);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+        /* Start off-screen-ish + transparent; .show animates it in. */
+        opacity: 0;
+        transform: translateX(12px);
+        transition: opacity 180ms ease, transform 180ms ease;
+      }
+      .toast.show {
+        opacity: 1;
+        transform: translateX(0);
+      }
+      .toast.join {
+        border-left-color: #7cf36b;
+      }
+      .toast.leave {
+        border-left-color: #ff6b81;
+      }
+      .toast.death {
+        border-left-color: #8a91a3;
+      }
+      .toast .who {
+        color: var(--accent);
+        font-weight: bold;
+      }
     </style>
   </head>
   <body>
@@ -333,6 +377,9 @@
       <span id="roomcode" class="rb-code">····</span>
       <button id="copy" class="rb-copy">Copy link</button>
     </div>
+
+    <!-- Transient join/leave toasts (populated by GameScene). -->
+    <div id="toasts" aria-live="polite"></div>
 
     <!-- In-game HUD: local hero's health + loot haul by rarity. -->
     <div id="hud" hidden>
