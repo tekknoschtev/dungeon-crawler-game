@@ -12,6 +12,7 @@ import {
   MOB_DAMAGE,
   BUFF_DURATION,
   MAX_HEAL_CHARGES,
+  PASSIVE_REGEN,
   RARITIES,
   RARITY_TOTAL,
   CATEGORIES,
@@ -139,6 +140,23 @@ export function playerAttackDamage(attackBuffActive: boolean, attackMult: number
 /** Damage a mob hit deals to a player after an active defense buff soaks some. */
 export function mobDamageAfterDefense(defenseBuffActive: boolean, defenseReduce: number): number {
   return MOB_DAMAGE * (1 - (defenseBuffActive ? defenseReduce : 0));
+}
+
+// --- Passive regen -----------------------------------------------------
+
+/**
+ * HP after `dt` seconds of passive regen, clamped to `maxHp`. Caller gates on the
+ * player being alive (hp > 0); this just does the clamped arithmetic so it stays
+ * pure and testable. Already-full HP is returned unchanged.
+ */
+export function regenHp(
+  hp: number,
+  maxHp: number,
+  dt: number,
+  ratePerSec: number = PASSIVE_REGEN
+): number {
+  if (hp >= maxHp) return hp;
+  return Math.min(maxHp, hp + ratePerSec * dt);
 }
 
 // --- Mob AI ------------------------------------------------------------

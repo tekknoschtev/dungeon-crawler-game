@@ -28,6 +28,7 @@ import {
   applyLootEffect,
   playerAttackDamage,
   mobDamageAfterDefense,
+  regenHp,
   pickAggroTarget,
   type AggroCandidate,
 } from "./logic";
@@ -310,6 +311,9 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
         else if (this.now >= c.respawnAt) this.respawn(player, c);
         return;
       }
+
+      // Slow passive heal while alive (no-op at full HP).
+      player.hp = regenHp(player.hp, player.maxHp, dt);
 
       // Tick down active buffs; clear their potency once they lapse.
       if (player.attackBuff > 0) {
