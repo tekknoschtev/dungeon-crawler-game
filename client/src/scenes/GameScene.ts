@@ -77,7 +77,7 @@ const LOOT_GLOW_DEPTH = 4;
 const ATTACK_COOLDOWN_MS = 450; // client throttle; mirrors the server cooldown
 const SWING_RADIUS = 26; // world px of the local swing ring (feedback only)
 
-// Rarity → accent color (loot glow + HUD).
+// Rarity → accent color (loot glow), as a Phaser int and a CSS string (HUD).
 const RARITY_COLORS: Record<string, number> = {
   common: 0xb8c0cc,
   uncommon: 0x7cf36b,
@@ -85,6 +85,16 @@ const RARITY_COLORS: Record<string, number> = {
   epic: 0xc08bff,
   legendary: 0xffb028,
 };
+// Loot icons: heal/attack come from the Tiny Dungeon sheet (red potion / sword);
+// defense uses our custom steel-shield sprite (Tiny Dungeon has no shield tile).
+const CATEGORY_FRAME: Record<string, number> = {
+  heal: 115, // red potion
+  attack: 103, // sword
+};
+const SHIELD_KEY = "shield"; // custom 16px shield (see ATTRIBUTION.md)
+
+const BUFF_SECONDS = 6; // mirrors server BUFF_DURATION (for HUD countdown bars)
+const HEAL_COOLDOWN_MS = 250; // light throttle on the heal action
 
 /** Shapes decoded on the client (mirror the server schema). */
 interface PlayerView {
@@ -94,11 +104,9 @@ interface PlayerView {
   color: string;
   hp: number;
   maxHp: number;
-  lootCommon: number;
-  lootUncommon: number;
-  lootRare: number;
-  lootEpic: number;
-  lootLegendary: number;
+  healCharges: number; // stacked heal potions on hand
+  attackBuff: number; // seconds remaining (> 0 = active)
+  defenseBuff: number;
 }
 
 interface MobView {
@@ -113,7 +121,7 @@ interface LootView {
   x: number;
   y: number;
   rarity: string;
-  kind: number; // sprite-sheet frame index
+  category: string; // "heal" | "attack" | "defense"
 }
 
 interface MapMessage {
@@ -128,9 +136,12 @@ interface Entity {
   sprite: Phaser.GameObjects.Image;
   label: Phaser.GameObjects.Text;
   hpBar: Phaser.GameObjects.Graphics;
+  aura: Phaser.GameObjects.Arc; // buff glow under the hero
   target: { x: number; y: number };
   hp: number;
   maxHp: number;
+  atkBuff: number; // seconds remaining (drives the aura)
+  defBuff: number;
 }
 
 interface MobEntity {
@@ -173,10 +184,13 @@ export class GameScene extends Phaser.Scene {
     s: Phaser.Input.Keyboard.Key;
     d: Phaser.Input.Keyboard.Key;
     space: Phaser.Input.Keyboard.Key;
+    q: Phaser.Input.Keyboard.Key;
   };
   private lastSent: InputState = { up: false, down: false, left: false, right: false };
   private lastAttackAt = 0; // client-side attack throttle (ms)
   private attackRequested = false; // set by the touch attack button (UIScene)
+  private lastHealAt = 0; // client-side heal throttle (ms)
+  private healRequested = false; // set by the touch heal button (UIScene)
 
   constructor() {
     super("game");
@@ -187,6 +201,7 @@ export class GameScene extends Phaser.Scene {
       frameWidth: TILE_SRC,
       frameHeight: TILE_SRC,
     });
+    this.load.image(SHIELD_KEY, "/assets/tiny-dungeon/shield.png");
   }
 
   create() {
@@ -217,17 +232,20 @@ export class GameScene extends Phaser.Scene {
       s: kb.addKey(Phaser.Input.Keyboard.KeyCodes.S),
       d: kb.addKey(Phaser.Input.Keyboard.KeyCodes.D),
       space: kb.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE),
+      q: kb.addKey(Phaser.Input.Keyboard.KeyCodes.Q),
     };
     kb.addCapture("SPACE"); // don't let Space scroll/trigger page defaults
 
     // Parallel scene that feeds touch movement into the registry (mobile).
     this.scene.launch("ui");
 
-    // Attack: Space (above) on desktop, or the UIScene touch button, which fires
-    // a game-level "attack" event so UIScene stays Colyseus-free.
+    // Attack/heal: keyboard (Space / Q) on desktop, or the UIScene touch buttons,
+    // which fire game-level events so UIScene stays Colyseus-free.
     this.game.events.on("attack", this.onAttackRequest, this);
+    this.game.events.on("useHeal", this.onHealRequest, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.events.off("attack", this.onAttackRequest, this);
+      this.game.events.off("useHeal", this.onHealRequest, this);
     });
 
     this.setupRoom();
@@ -235,6 +253,10 @@ export class GameScene extends Phaser.Scene {
 
   private onAttackRequest() {
     this.attackRequested = true;
+  }
+
+  private onHealRequest() {
+    this.healRequested = true;
   }
 
   /**
@@ -273,6 +295,8 @@ export class GameScene extends Phaser.Scene {
           e.target.y = player.y;
           e.hp = player.hp;
           e.maxHp = player.maxHp;
+          e.atkBuff = player.attackBuff;
+          e.defBuff = player.defenseBuff;
         }
         if (isLocal) {
           this.updateHud(player);
@@ -287,6 +311,7 @@ export class GameScene extends Phaser.Scene {
         e.sprite.destroy();
         e.label.destroy();
         e.hpBar.destroy();
+        e.aura.destroy();
         this.entities.delete(sessionId);
       }
     });
@@ -342,14 +367,23 @@ export class GameScene extends Phaser.Scene {
       .setDepth(20);
 
     const hpBar = this.add.graphics().setDepth(11);
+    // Buff glow, drawn under the hero; shown/colored from active buffs in update.
+    const aura = this.add
+      .circle(player.x, player.y, 11, 0xffffff, 0.25)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(9)
+      .setVisible(false);
 
     this.entities.set(sessionId, {
       sprite,
       label,
       hpBar,
+      aura,
       target: { x: player.x, y: player.y },
       hp: player.hp,
       maxHp: player.maxHp,
+      atkBuff: player.attackBuff,
+      defBuff: player.defenseBuff,
     });
 
     // The camera follows the local hero through the world.
@@ -392,8 +426,11 @@ export class GameScene extends Phaser.Scene {
       .circle(l.x, l.y, 9, color, 0.5)
       .setBlendMode(Phaser.BlendModes.ADD)
       .setDepth(LOOT_GLOW_DEPTH);
-    const sprite = this.add
-      .image(l.x, l.y, TILES_KEY, l.kind)
+    const sprite = (
+      l.category === "defense"
+        ? this.add.image(l.x, l.y, SHIELD_KEY)
+        : this.add.image(l.x, l.y, TILES_KEY, CATEGORY_FRAME[l.category] ?? CATEGORY_FRAME.heal)
+    )
       .setDisplaySize(TILE, TILE)
       .setDepth(LOOT_DEPTH);
     // Gentle pulse so drops read as "shiny", brighter the rarer they are.
@@ -457,6 +494,31 @@ export class GameScene extends Phaser.Scene {
     if (me) this.showSwing(me.sprite.x, me.sprite.y);
   }
 
+  private handleHealInput(time: number) {
+    const want = Phaser.Input.Keyboard.JustDown(this.keys.q) || this.healRequested;
+    this.healRequested = false;
+    if (!want || !this.room) return;
+    if (time - this.lastHealAt < HEAL_COOLDOWN_MS) return;
+    this.lastHealAt = time;
+    this.room.send("useHeal"); // server no-ops if there's no charge / we're dead
+  }
+
+  /** Show/colour the buff aura under a hero from its active buffs. */
+  private updateAura(e: Entity, time: number) {
+    const atk = e.atkBuff > 0;
+    const def = e.defBuff > 0;
+    if (!atk && !def) {
+      if (e.aura.visible) e.aura.setVisible(false);
+      return;
+    }
+    const color = atk && def ? 0xc08bff : atk ? 0xff5d73 : 0x4ec9ff;
+    e.aura
+      .setVisible(true)
+      .setFillStyle(color, 0.3)
+      .setPosition(e.sprite.x, e.sprite.y)
+      .setScale(1 + 0.12 * Math.sin(time / 110));
+  }
+
   /** A quick expanding ring at the hero for attack feedback. */
   private showSwing(x: number, y: number) {
     const ring = this.add
@@ -477,17 +539,31 @@ export class GameScene extends Phaser.Scene {
   private updateHud(p: PlayerView) {
     const hud = document.getElementById("hud");
     if (hud) hud.hidden = false;
+
     const fill = document.getElementById("hud-hp-fill");
     if (fill) fill.style.width = `${Math.max(0, Math.min(100, (p.hp / p.maxHp) * 100))}%`;
-    const set = (id: string, n: number) => {
-      const el = document.getElementById(id);
-      if (el) el.textContent = String(n);
-    };
-    set("loot-common", p.lootCommon);
-    set("loot-uncommon", p.lootUncommon);
-    set("loot-rare", p.lootRare);
-    set("loot-epic", p.lootEpic);
-    set("loot-legendary", p.lootLegendary);
+
+    // Carried heals: a heart with the stack count, greyed when empty.
+    const heal = document.getElementById("hud-heal");
+    const healN = document.getElementById("hud-heal-n");
+    if (heal) heal.classList.toggle("empty", p.healCharges <= 0);
+    if (heal) heal.title = p.healCharges > 0 ? `${p.healCharges} heal(s) — press Q` : "no heals";
+    if (healN) healN.textContent = String(p.healCharges);
+
+    this.setBuffChip("hud-atk", p.attackBuff);
+    this.setBuffChip("hud-def", p.defenseBuff);
+  }
+
+  private setBuffChip(id: string, secs: number) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (secs > 0) {
+      el.hidden = false;
+      const bar = el.querySelector("i") as HTMLElement | null;
+      if (bar) bar.style.width = `${Math.max(0, Math.min(100, (secs / BUFF_SECONDS) * 100))}%`;
+    } else {
+      el.hidden = true;
+    }
   }
 
   private setDeathOverlay(dead: boolean) {
@@ -576,6 +652,7 @@ export class GameScene extends Phaser.Scene {
   update(time: number, delta: number) {
     this.sendInput();
     this.handleAttackInput(time);
+    this.handleHealInput(time);
 
     // Smoothly interpolate every entity toward its authoritative position.
     // Frame-rate independent lerp factor.
@@ -586,6 +663,7 @@ export class GameScene extends Phaser.Scene {
       e.label.x = e.sprite.x;
       e.label.y = e.sprite.y - LABEL_OFFSET;
       this.drawHpBar(e.hpBar, e.sprite.x, e.sprite.y, e.hp, e.maxHp);
+      this.updateAura(e, time);
     });
     this.mobs.forEach((m) => {
       m.sprite.x = Phaser.Math.Linear(m.sprite.x, m.target.x, k);

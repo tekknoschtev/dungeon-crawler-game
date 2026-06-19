@@ -23,6 +23,18 @@ the local player is identified by their yellow name label rather than a drawn ri
   the gitignored `assets-src/tiny-dungeon/`).
 - Date added: 2026-06-16
 
+### Original — steel shield icon (loot)
+- Source URL: n/a (created for this project)
+- Author / creator: this project (hand-drawn to match the Tiny Dungeon style)
+- License: CC0 1.0 (we release it to the public domain)
+- License URL: https://creativecommons.org/publicdomain/zero/1.0/
+- Used for: the "defense" loot drop icon (Tiny Dungeon has no shield tile). A
+  16×16 sprite at `client/public/assets/tiny-dungeon/shield.png`, drawn using
+  Tiny Dungeon's own palette (outline `#3f2631`, steel `#c0cbdc/#8b9bb4/#52607c`,
+  blue boss `#0099db`) so it reads as native pack art.
+- Modifications: original work.
+- Date added: 2026-06-18
+
 ## Planned sources (Milestone 2)
 
 The plan is to pull top-down dungeon art from **Kenney** (https://kenney.nl),

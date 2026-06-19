@@ -19,9 +19,16 @@ const BASE_RADIUS = 60;
 const THUMB_RADIUS = 28;
 const UI_DEPTH = 1000;
 
-// Attack button, anchored to the bottom-right (mirror of the joystick thumb).
+// Action buttons, anchored to the bottom-right (mirror of the joystick thumb).
 const ATTACK_RADIUS = 38;
 const ATTACK_MARGIN = 18;
+const HEAL_RADIUS = 30; // heal button, to the left of attack
+const HEAL_GAP = 14; // gap between the two buttons
+// Use the actual pack art for the button icons (must match GameScene's
+// TILES_KEY + CATEGORY_FRAME: sword for attack, potion for heal).
+const TILES_KEY = "tiles";
+const FRAME_SWORD = 103;
+const FRAME_POTION = 115;
 
 /**
  * Parallel, screen-space scene that turns touch drags into the same movement
@@ -33,7 +40,9 @@ export class UIScene extends Phaser.Scene {
   private base!: Phaser.GameObjects.Arc;
   private thumb!: Phaser.GameObjects.Arc;
   private attackBtn!: Phaser.GameObjects.Arc;
-  private attackIcon!: Phaser.GameObjects.Text;
+  private attackIcon!: Phaser.GameObjects.Image;
+  private healBtn!: Phaser.GameObjects.Arc;
+  private healIcon!: Phaser.GameObjects.Image;
   private originX = 0;
   private originY = 0;
   private activeId: number | null = null; // pointer id currently driving the stick
@@ -69,12 +78,26 @@ export class UIScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(UI_DEPTH);
     this.attackIcon = this.add
-      .text(0, 0, "⚔", { fontFamily: "monospace", fontSize: "26px", color: "#ffd7dd" })
-      .setOrigin(0.5)
+      .image(0, 0, TILES_KEY, FRAME_SWORD)
+      .setDisplaySize(34, 34)
       .setScrollFactor(0)
       .setDepth(UI_DEPTH + 1);
-    this.layoutAttack();
-    this.scale.on(Phaser.Scale.Events.RESIZE, this.layoutAttack, this);
+
+    // Heal button (left of attack). Fires a game "useHeal" event; the server
+    // no-ops if there's no charge, so it's safe to tap anytime.
+    this.healBtn = this.add
+      .circle(0, 0, HEAL_RADIUS, 0x7cf36b, 0.22)
+      .setStrokeStyle(2, 0x7cf36b, 0.7)
+      .setScrollFactor(0)
+      .setDepth(UI_DEPTH);
+    this.healIcon = this.add
+      .image(0, 0, TILES_KEY, FRAME_POTION)
+      .setDisplaySize(28, 28)
+      .setScrollFactor(0)
+      .setDepth(UI_DEPTH + 1);
+
+    this.layoutButtons();
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.layoutButtons, this);
 
     this.input.on(Phaser.Input.Events.POINTER_DOWN, this.onDown, this);
     this.input.on(Phaser.Input.Events.POINTER_MOVE, this.onMove, this);
@@ -83,30 +106,34 @@ export class UIScene extends Phaser.Scene {
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.setIntent(NO_MOVE); // don't leave the hero walking if torn down mid-press
-      this.scale.off(Phaser.Scale.Events.RESIZE, this.layoutAttack, this);
+      this.scale.off(Phaser.Scale.Events.RESIZE, this.layoutButtons, this);
     });
   }
 
-  /** Pin the attack button to the bottom-right corner (RESIZE-safe). */
-  private layoutAttack() {
+  /** Pin the action buttons to the bottom-right corner (RESIZE-safe). */
+  private layoutButtons() {
     const cam = this.cameras.main;
-    const x = cam.width - ATTACK_MARGIN - ATTACK_RADIUS;
-    const y = cam.height - ATTACK_MARGIN - ATTACK_RADIUS;
-    this.attackBtn.setPosition(x, y);
-    this.attackIcon.setPosition(x, y);
+    const ax = cam.width - ATTACK_MARGIN - ATTACK_RADIUS;
+    const ay = cam.height - ATTACK_MARGIN - ATTACK_RADIUS;
+    this.attackBtn.setPosition(ax, ay);
+    this.attackIcon.setPosition(ax, ay);
+    const hx = ax - ATTACK_RADIUS - HEAL_GAP - HEAL_RADIUS;
+    this.healBtn.setPosition(hx, ay);
+    this.healIcon.setPosition(hx, ay);
   }
 
   private onDown(pointer: Phaser.Input.Pointer) {
-    // Attack button takes priority over the joystick region (works for touch or
-    // a mouse click, so it's usable on desktop too).
+    // Heal button takes priority over everything (touch or mouse).
+    if (Math.hypot(pointer.x - this.healBtn.x, pointer.y - this.healBtn.y) <= HEAL_RADIUS) {
+      this.game.events.emit("useHeal");
+      this.tweens.add({ targets: this.healBtn, scale: 0.88, duration: 70, yoyo: true });
+      return;
+    }
+
+    // Attack button next (works for touch or a mouse click → usable on desktop).
     if (Math.hypot(pointer.x - this.attackBtn.x, pointer.y - this.attackBtn.y) <= ATTACK_RADIUS) {
       this.game.events.emit("attack");
-      this.tweens.add({
-        targets: [this.attackBtn, this.attackIcon],
-        scale: 0.88,
-        duration: 70,
-        yoyo: true,
-      });
+      this.tweens.add({ targets: this.attackBtn, scale: 0.88, duration: 70, yoyo: true });
       return;
     }
 

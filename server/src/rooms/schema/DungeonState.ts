@@ -13,12 +13,12 @@ export class Player extends Schema {
   @type("number") y: number = 0;
   @type("number") hp: number = 100;
   @type("number") maxHp: number = 100;
-  // Loot haul, counted by rarity (drives the HUD).
-  @type("number") lootCommon: number = 0;
-  @type("number") lootUncommon: number = 0;
-  @type("number") lootRare: number = 0;
-  @type("number") lootEpic: number = 0;
-  @type("number") lootLegendary: number = 0;
+  // Usable loot. healCharges = number of carried heal potions (stackable, quaffed
+  // on demand). attackBuff/defenseBuff are seconds remaining on the instant
+  // pickup buffs (> 0 = active); they drive the HUD + hero feedback.
+  @type("number") healCharges: number = 0;
+  @type("number") attackBuff: number = 0;
+  @type("number") defenseBuff: number = 0;
 }
 
 /** A server-driven enemy. Position is simulated and synced every tick. */
@@ -34,8 +34,8 @@ export class Mob extends Schema {
 export class Loot extends Schema {
   @type("number") x: number = 0;
   @type("number") y: number = 0;
-  @type("string") rarity: string = "common";
-  @type("number") kind: number = 0; // sprite-sheet frame index for the item
+  @type("string") rarity: string = "common"; // scales the effect's strength
+  @type("string") category: string = "heal"; // "heal" | "attack" | "defense"
 }
 
 /**

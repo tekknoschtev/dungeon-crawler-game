@@ -237,28 +237,62 @@
         background-size: 120px 100%;
         transition: width 120ms linear;
       }
-      .hud-loot {
+      .hud-row {
         display: flex;
-        gap: 10px;
+        gap: 8px;
+        align-items: center;
+      }
+      .chip {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        font-size: 15px;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid var(--line);
+      }
+      .chip[hidden] {
+        display: none;
+      }
+      #hud-heal {
+        color: #ff6b81;
+      }
+      #hud-heal.empty {
+        color: #444a57;
+        opacity: 0.5;
+      }
+      .chip.atk {
+        color: #ff9aa6;
+      }
+      .chip.def {
+        color: #9ad8ff;
+      }
+      .chip i {
+        position: absolute;
+        left: 2px;
+        bottom: 2px;
+        height: 2px;
+        width: 100%;
+        background: currentColor;
+        border-radius: 1px;
+      }
+      .chip b {
+        position: absolute;
+        top: -5px;
+        right: -5px;
+        font-size: 10px;
         font-weight: bold;
+        line-height: 1;
+        padding: 1px 3px;
+        border-radius: 6px;
+        background: #2a2e3a;
+        color: #fff;
       }
-      .hud-loot span::before {
-        content: "◆ ";
-      }
-      .r-common {
-        color: #b8c0cc;
-      }
-      .r-uncommon {
-        color: #7cf36b;
-      }
-      .r-rare {
-        color: #4ec9ff;
-      }
-      .r-epic {
-        color: #c08bff;
-      }
-      .r-legendary {
-        color: #ffb028;
+      .chip.empty b {
+        opacity: 0.4;
       }
     </style>
   </head>
@@ -306,12 +340,10 @@
         <span class="hud-hp-label">HP</span>
         <span class="hud-hp-bar"><i id="hud-hp-fill"></i></span>
       </div>
-      <div class="hud-loot">
-        <span class="r-common" id="loot-common">0</span>
-        <span class="r-uncommon" id="loot-uncommon">0</span>
-        <span class="r-rare" id="loot-rare">0</span>
-        <span class="r-epic" id="loot-epic">0</span>
-        <span class="r-legendary" id="loot-legendary">0</span>
+      <div class="hud-row">
+        <span id="hud-heal" class="chip empty" title="no heals">❤<b id="hud-heal-n">0</b></span>
+        <span id="hud-atk" class="chip atk" hidden>🗡<i></i></span>
+        <span id="hud-def" class="chip def" hidden>🛡<i></i></span>
       </div>
     </div>
 
