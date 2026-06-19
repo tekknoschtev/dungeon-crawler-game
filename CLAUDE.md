@@ -56,3 +56,29 @@ npm run dev     # server (:2567) + client (:5173) together
 
 When implementing combat and loot, extend `DungeonState` with new schema
 collections (e.g. `mobs`, `loot`) and drive them from the server simulation.
+
+## QOL / polish backlog
+
+Surfaced from real co-op playtesting (the game is live and working). Grouped by
+where the work mostly lives. Tuning lives in `server/src/rooms/tuning.ts`;
+client-only items are pure render/UX and need no new synced state.
+
+- **Join/leave toasts** (client) — toast-style message when a player joins or
+  leaves. Drive off the existing `players` MapSchema add/remove callbacks; no
+  new server state needed.
+- **Mob attack telegraph** (client) — a visual when mobs are attacking (wind-up
+  flash / lunge). Server already knows attack timing; surface it to the client
+  rather than re-deriving on the client.
+- **Hero appearance select** (client + a little server) — pick hero color and/or
+  sprite at the lobby. Color can be a synced `@type` on the player; multiple
+  hero images depend on the M2 art pass having more than one hero frame.
+- **Sound effects** (client) — hits, pickups, level/door events. CC0/license-
+  compatible only, logged in `ATTRIBUTION.md` like all assets.
+- **Floor variation** (client) — debris / texture variation so floors aren't
+  flat. Decorative only; keep it client-side, don't bloat the synced map.
+- **Closeable doors** (server) — doors that can be shut to make a safe space to
+  recover/pause. Real gameplay + map state — server-authoritative; extend the
+  map/door state and simulation.
+- **Passive health regen** (server, `tuning.ts`) — slow HP increase over time.
+- **Loot drop rebalance** (server, `tuning.ts`) — raise potion drop rate; lower
+  attack/defense buff drop rate but increase their effect and/or duration.
