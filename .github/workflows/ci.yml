@@ -1,0 +1,30 @@
+name: CI
+
+# Catch regressions before they merge: typecheck/build both packages and run
+# the server test suite on every push to main and on every pull request.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Installs root + server + client deps (see the "setup" script).
+      - name: Install dependencies
+        run: npm run setup
+
+      # `build` runs tsc for the server and tsc+vite for the client, so this
+      # doubles as a typecheck of both packages.
+      - name: Build (typecheck server + client)
+        run: npm run build
+
+      - name: Run tests
+        run: npm test

@@ -1,6 +1,36 @@
 import { Room, Client, matchMaker } from "colyseus";
 import { DungeonState, Player, Mob, Loot } from "./schema/DungeonState";
 import { loadMap, LoadedMap, TILE } from "./map";
+import {
+  PLAYER_SPEED,
+  PLAYER_RADIUS,
+  PLAYER_MAX_HP,
+  PLAYER_ATTACK_RANGE,
+  PLAYER_ATTACK_COOLDOWN,
+  RESPAWN_DELAY,
+  MOB_MAX_HP,
+  MOB_SPEED,
+  MOB_RADIUS,
+  MOB_ATTACK_COOLDOWN,
+  MOB_AGGRO_RANGE,
+  MOB_ATTACK_RANGE,
+  MOB_TARGET_COUNT,
+  MOB_RESPAWN_INTERVAL,
+  PICKUP_RANGE,
+  HEAL_PCT,
+} from "./tuning";
+import {
+  dist,
+  normalize,
+  collides as tileCollides,
+  rollRarity,
+  rollCategory,
+  applyLootEffect,
+  playerAttackDamage,
+  mobDamageAfterDefense,
+  pickAggroTarget,
+  type AggroCandidate,
+} from "./logic";
 
 // Friendly join codes: 4 chars, no ambiguous glyphs (0/O, 1/I/L). Short enough
 // to read aloud or type on a phone; ~707k combinations is plenty for the handful
@@ -28,10 +58,6 @@ async function uniqueCode(): Promise<string> {
   return randomCode();
 }
 
-function dist(ax: number, ay: number, bx: number, by: number): number {
-  return Math.hypot(ax - bx, ay - by);
-}
-
 /** Per-player input held server-side only (never trusted blindly). */
 interface InputState {
   up: boolean;
@@ -55,53 +81,6 @@ interface MobAI {
   wanderDx: number;
   wanderDy: number;
 }
-
-// --- Tuning -------------------------------------------------------------
-// Tuned for 16px tiles. PLAYER_RADIUS keeps the hero's box narrower than a
-// 1-tile corridor so it slips through gaps.
-const PLAYER_SPEED = 80; // px/s
-const PLAYER_RADIUS = 5;
-const PLAYER_MAX_HP = 100;
-const PLAYER_ATTACK_DAMAGE = 12;
-const PLAYER_ATTACK_RANGE = 24; // px radius of the (omnidirectional) melee swing
-const PLAYER_ATTACK_COOLDOWN = 0.45; // s
-const RESPAWN_DELAY = 3; // s
-
-const MOB_MAX_HP = 30;
-const MOB_SPEED = 50; // px/s — slower than the player so mobs are kiteable
-const MOB_RADIUS = 5;
-const MOB_DAMAGE = 8;
-const MOB_ATTACK_COOLDOWN = 1.0; // s
-const MOB_AGGRO_RANGE = 96; // px (~6 tiles)
-const MOB_ATTACK_RANGE = 18; // px
-const MOB_TARGET_COUNT = 12; // population the room tops up to
-const MOB_RESPAWN_INTERVAL = 4; // s between top-up spawns
-
-const PICKUP_RANGE = 14; // px — auto-collect radius
-const BUFF_DURATION = 6; // s — attack/defense buff length
-const HEAL_PCT = 0.4; // fraction of max HP restored per quaffed potion
-const MAX_HEAL_CHARGES = 5; // how many heal potions a hero can stockpile
-
-// Loot rarity: drop weight + how strongly it scales the attack/defense buffs.
-// (Heals are a flat % and stack, so rarity no longer affects them.)
-const RARITIES = [
-  { name: "common", weight: 60, attackMult: 1.4, defenseReduce: 0.2 },
-  { name: "uncommon", weight: 25, attackMult: 1.7, defenseReduce: 0.35 },
-  { name: "rare", weight: 10, attackMult: 2.0, defenseReduce: 0.5 },
-  { name: "epic", weight: 4, attackMult: 2.3, defenseReduce: 0.6 },
-  { name: "legendary", weight: 1, attackMult: 2.6, defenseReduce: 0.7 },
-];
-const RARITY_TOTAL = RARITIES.reduce((sum, r) => sum + r.weight, 0);
-const rarityByName = (name: string) => RARITIES.find((r) => r.name === name) ?? RARITIES[0];
-
-// Loot categories: attack/defense a touch more common than heal, so heals feel
-// like the prize you ration.
-const CATEGORIES = [
-  { name: "attack", weight: 40 },
-  { name: "defense", weight: 40 },
-  { name: "heal", weight: 30 },
-];
-const CATEGORY_TOTAL = CATEGORIES.reduce((sum, c) => sum + c.weight, 0);
 
 // Distinct hero colors handed out round-robin as players join.
 const COLORS = ["#ff5d73", "#4ec9ff", "#ffd65c", "#7cf36b", "#c08bff", "#ff9f45"];
@@ -217,7 +196,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     if (this.now < c.attackReadyAt) return; // on cooldown
     c.attackReadyAt = this.now + PLAYER_ATTACK_COOLDOWN;
 
-    const damage = PLAYER_ATTACK_DAMAGE * (player.attackBuff > 0 ? c.attackMult : 1);
+    const damage = playerAttackDamage(player.attackBuff > 0, c.attackMult);
     this.state.mobs.forEach((mob, id) => {
       if (dist(mob.x, mob.y, player.x, player.y) <= PLAYER_ATTACK_RANGE + MOB_RADIUS) {
         mob.hp -= damage;
@@ -255,35 +234,24 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.mobAI.set(id, { attackReadyAt: 0, nextWanderAt: 0, wanderDx: 0, wanderDy: 0 });
   }
 
-  private updateMob(mob: Mob, id: string, dt: number) {
+  private updateMob(mob: Mob, id: string, dt: number, candidates: AggroCandidate[]) {
     const ai = this.mobAI.get(id);
     if (!ai) return;
 
-    // Aggro the nearest living player within range.
-    let target: Player | null = null;
-    let targetId = "";
-    let best = MOB_AGGRO_RANGE;
-    this.state.players.forEach((p, sid) => {
-      if (p.hp <= 0) return;
-      const d = dist(mob.x, mob.y, p.x, p.y);
-      if (d < best) {
-        best = d;
-        target = p;
-        targetId = sid;
-      }
-    });
-
-    if (target) {
-      const t = target as Player;
-      if (best <= MOB_ATTACK_RANGE) {
+    // Aggro the nearest living player within range (candidates pre-filtered to
+    // the living, built once per tick).
+    const aggro = pickAggroTarget(mob.x, mob.y, candidates, MOB_AGGRO_RANGE);
+    const target = aggro ? this.state.players.get(aggro.id) : undefined;
+    if (aggro && target) {
+      if (aggro.dist <= MOB_ATTACK_RANGE) {
         if (this.now >= ai.attackReadyAt) {
           ai.attackReadyAt = this.now + MOB_ATTACK_COOLDOWN;
-          const tc = this.combat.get(targetId);
-          const reduce = tc && t.defenseBuff > 0 ? tc.defenseReduce : 0;
-          t.hp = Math.max(0, t.hp - MOB_DAMAGE * (1 - reduce));
+          const tc = this.combat.get(aggro.id);
+          const dmg = mobDamageAfterDefense(target.defenseBuff > 0, tc ? tc.defenseReduce : 0);
+          target.hp = Math.max(0, target.hp - dmg);
         }
       } else {
-        this.moveMob(mob, t.x - mob.x, t.y - mob.y, dt, 1);
+        this.moveMob(mob, target.x - mob.x, target.y - mob.y, dt, 1);
       }
       return;
     }
@@ -306,11 +274,11 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   }
 
   private moveMob(mob: Mob, dx: number, dy: number, dt: number, speedScale: number) {
-    const len = Math.hypot(dx, dy);
-    if (len === 0) return;
+    const dir = normalize(dx, dy);
+    if (dir.x === 0 && dir.y === 0) return;
     const speed = MOB_SPEED * speedScale * dt;
-    const nx = mob.x + (dx / len) * speed;
-    const ny = mob.y + (dy / len) * speed;
+    const nx = mob.x + dir.x * speed;
+    const ny = mob.y + dir.y * speed;
     if (!this.collides(nx, mob.y, MOB_RADIUS)) mob.x = nx;
     if (!this.collides(mob.x, ny, MOB_RADIUS)) mob.y = ny;
   }
@@ -321,50 +289,9 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     const loot = new Loot();
     loot.x = x;
     loot.y = y;
-    loot.rarity = this.rollRarity().name;
-    loot.category = this.rollCategory();
+    loot.rarity = rollRarity().name;
+    loot.category = rollCategory();
     this.state.loot.set(`l${this.lootSeq++}`, loot);
-  }
-
-  private rollRarity() {
-    let roll = Math.random() * RARITY_TOTAL;
-    for (const r of RARITIES) {
-      roll -= r.weight;
-      if (roll < 0) return r;
-    }
-    return RARITIES[0];
-  }
-
-  private rollCategory(): string {
-    let roll = Math.random() * CATEGORY_TOTAL;
-    for (const c of CATEGORIES) {
-      roll -= c.weight;
-      if (roll < 0) return c.name;
-    }
-    return CATEGORIES[0].name;
-  }
-
-  /**
-   * Apply a walked-over drop: instant buff (attack/defense) or a banked heal.
-   * Returns false if the drop should be LEFT on the floor — a heal when the stack
-   * is already full — so it stays available for later or for a teammate.
-   */
-  private applyLoot(player: Player, c: Combat, loot: Loot): boolean {
-    const r = rarityByName(loot.rarity);
-    if (loot.category === "attack") {
-      player.attackBuff = BUFF_DURATION; // refresh
-      c.attackMult = Math.max(c.attackMult, r.attackMult); // never downgrade an active buff
-      return true;
-    }
-    if (loot.category === "defense") {
-      player.defenseBuff = BUFF_DURATION;
-      c.defenseReduce = Math.max(c.defenseReduce, r.defenseReduce);
-      return true;
-    }
-    // heal: only grab it if there's room in the stack.
-    if (player.healCharges >= MAX_HEAL_CHARGES) return false;
-    player.healCharges++;
-    return true;
   }
 
   // --- Simulation --------------------------------------------------------
@@ -396,17 +323,14 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
 
       const input = this.inputs.get(sessionId);
       if (input) {
-        let dx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-        let dy = (input.down ? 1 : 0) - (input.up ? 1 : 0);
-        if (dx !== 0 || dy !== 0) {
-          // normalize diagonals so they aren't faster
-          if (dx !== 0 && dy !== 0) {
-            const inv = Math.SQRT1_2;
-            dx *= inv;
-            dy *= inv;
-          }
-          const nextX = player.x + dx * PLAYER_SPEED * dt;
-          const nextY = player.y + dy * PLAYER_SPEED * dt;
+        // normalize() keeps diagonals from being faster than cardinal moves.
+        const dir = normalize(
+          (input.right ? 1 : 0) - (input.left ? 1 : 0),
+          (input.down ? 1 : 0) - (input.up ? 1 : 0)
+        );
+        if (dir.x !== 0 || dir.y !== 0) {
+          const nextX = player.x + dir.x * PLAYER_SPEED * dt;
+          const nextY = player.y + dir.y * PLAYER_SPEED * dt;
           // Axis-separated collision check gives smooth wall-sliding.
           if (!this.collides(nextX, player.y, PLAYER_RADIUS)) player.x = nextX;
           if (!this.collides(player.x, nextY, PLAYER_RADIUS)) player.y = nextY;
@@ -416,13 +340,19 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       // Auto-pickup any loot underfoot → applies its effect. A heal you can't
       // hold (full stack) is left on the floor instead of being wasted.
       this.state.loot.forEach((loot, lid) => {
-        if (dist(loot.x, loot.y, player.x, player.y) <= PICKUP_RANGE && this.applyLoot(player, c, loot)) {
+        if (dist(loot.x, loot.y, player.x, player.y) <= PICKUP_RANGE && applyLootEffect(player, c, loot)) {
           this.state.loot.delete(lid);
         }
       });
     });
 
-    this.state.mobs.forEach((mob, id) => this.updateMob(mob, id, dt));
+    // Build the mob-aggro candidate list once per tick (living players only),
+    // then let every mob target against the same snapshot.
+    const livingPlayers: AggroCandidate[] = [];
+    this.state.players.forEach((p, sid) => {
+      if (p.hp > 0) livingPlayers.push({ id: sid, x: p.x, y: p.y });
+    });
+    this.state.mobs.forEach((mob, id) => this.updateMob(mob, id, dt, livingPlayers));
 
     // Top the population back up over time as mobs are killed.
     if (this.state.mobs.size < MOB_TARGET_COUNT && this.now >= this.nextMobSpawnAt) {
@@ -446,18 +376,6 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
 
   /** True if a box of half-size r centered at (x, y) overlaps any wall tile. */
   private collides(x: number, y: number, r: number): boolean {
-    const corners = [
-      [x - r, y - r],
-      [x + r, y - r],
-      [x - r, y + r],
-      [x + r, y + r],
-    ];
-    for (const [cx, cy] of corners) {
-      const tx = Math.floor(cx / TILE);
-      const ty = Math.floor(cy / TILE);
-      if (ty < 0 || ty >= this.map.height || tx < 0 || tx >= this.map.width) return true;
-      if (this.map.grid[ty][tx] === 1) return true;
-    }
-    return false;
+    return tileCollides(this.map.grid, this.map.width, this.map.height, TILE, x, y, r);
   }
 }
