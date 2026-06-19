@@ -247,6 +247,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       if (aggro.dist <= MOB_ATTACK_RANGE) {
         if (this.now >= ai.attackReadyAt) {
           ai.attackReadyAt = this.now + MOB_ATTACK_COOLDOWN;
+          mob.attackTick = (mob.attackTick + 1) % 256; // signal a strike to clients
           const tc = this.combat.get(aggro.id);
           const dmg = mobDamageAfterDefense(target.defenseBuff > 0, tc ? tc.defenseReduce : 0);
           target.hp = Math.max(0, target.hp - dmg);

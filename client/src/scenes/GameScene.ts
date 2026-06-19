@@ -115,6 +115,7 @@ interface MobView {
   hp: number;
   maxHp: number;
   kind: string;
+  attackTick: number; // bumps each time the mob lands a hit (strike animation cue)
 }
 
 interface LootView {
@@ -150,6 +151,8 @@ interface MobEntity {
   target: { x: number; y: number };
   hp: number;
   maxHp: number;
+  baseScale: number; // sprite scale at rest, so the strike pop can return to it
+  attackTick: number; // last-seen server strike counter
 }
 
 interface LootEntity {
@@ -339,6 +342,10 @@ export class GameScene extends Phaser.Scene {
           m.target.y = mob.y;
           m.hp = mob.hp;
           m.maxHp = mob.maxHp;
+          if (mob.attackTick !== m.attackTick) {
+            m.attackTick = mob.attackTick;
+            this.mobStrike(m);
+          }
         }
       });
     });
@@ -423,12 +430,15 @@ export class GameScene extends Phaser.Scene {
       target: { x: mob.x, y: mob.y },
       hp: mob.hp,
       maxHp: mob.maxHp,
+      baseScale: sprite.scaleX, // set by setDisplaySize above
+      attackTick: mob.attackTick, // seed so we don't flash on spawn
     });
   }
 
   private removeMob(id: string) {
     const m = this.mobs.get(id);
     if (!m) return;
+    this.tweens.killTweensOf(m.sprite); // cancel a mid-strike pop before freeing
     m.sprite.destroy();
     m.hpBar.destroy();
     this.mobs.delete(id);
@@ -531,6 +541,28 @@ export class GameScene extends Phaser.Scene {
       .setFillStyle(color, 0.3)
       .setPosition(e.sprite.x, e.sprite.y)
       .setScale(1 + 0.12 * Math.sin(time / 110));
+  }
+
+  /**
+   * One-shot strike feedback when a mob lands a hit: a quick scale "chomp" plus
+   * a red flash. Position is interpolated each frame in update(), so we animate
+   * scale/tint (not position) to avoid fighting that lerp.
+   */
+  private mobStrike(m: MobEntity) {
+    const s = m.sprite;
+    this.tweens.killTweensOf(s); // drop any in-flight pop so scale can't compound
+    s.setScale(m.baseScale).setTint(0xff5d5d);
+    this.tweens.add({
+      targets: s,
+      scaleX: m.baseScale * 1.3,
+      scaleY: m.baseScale * 1.3,
+      duration: 90,
+      yoyo: true,
+      ease: "Quad.easeOut",
+      // Reset on the same callback (no stray timer touching a freed sprite if the
+      // mob dies mid-animation; removeMob kills the tween before destroying it).
+      onComplete: () => s.setScale(m.baseScale).clearTint(),
+    });
   }
 
   /** A quick expanding ring at the hero for attack feedback. */
