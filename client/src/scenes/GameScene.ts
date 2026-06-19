@@ -284,13 +284,22 @@ export class GameScene extends Phaser.Scene {
       loot: Map<string, LootView>;
     };
 
+    // onAdd fires synchronously for players already in the room (including us)
+    // when these callbacks register; arm toasts only *after* that initial pass
+    // so we don't announce the existing party — or ourselves — on join.
+    let toastsArmed = false;
+
     $(state).players.onAdd((player: PlayerView, sessionId: string) => {
       const isLocal = sessionId === this.localId;
       this.addEntity(player, sessionId, isLocal);
       if (isLocal) this.updateHud(player);
+      if (toastsArmed && !isLocal) this.showToast(player.name, "join");
       $(player).onChange(() => {
         const e = this.entities.get(sessionId);
         if (e) {
+          // Alive -> dead transition for a teammate: announce it. (Our own death
+          // shows the center overlay below, so skip self to avoid redundancy.)
+          if (!isLocal && e.hp > 0 && player.hp <= 0) this.showToast(player.name, "death");
           e.target.x = player.x;
           e.target.y = player.y;
           e.hp = player.hp;
@@ -305,7 +314,12 @@ export class GameScene extends Phaser.Scene {
       });
     });
 
-    $(state).players.onRemove((_player: PlayerView, sessionId: string) => {
+    // Existing players have now fired their initial onAdd synchronously; any
+    // future onAdd is a genuine join worth announcing.
+    toastsArmed = true;
+
+    $(state).players.onRemove((player: PlayerView, sessionId: string) => {
+      if (sessionId !== this.localId) this.showToast(player.name, "leave");
       const e = this.entities.get(sessionId);
       if (e) {
         e.sprite.destroy();
@@ -564,6 +578,34 @@ export class GameScene extends Phaser.Scene {
     } else {
       el.hidden = true;
     }
+  }
+
+  /**
+   * Pop a transient DOM toast when a hero joins, leaves, or dies. The name is set
+   * via textContent (never innerHTML) since player names are user-supplied and
+   * only length-trimmed server-side — keep them out of the HTML parser.
+   */
+  private showToast(name: string, kind: "join" | "leave" | "death") {
+    const container = document.getElementById("toasts");
+    if (!container) return;
+
+    const suffix =
+      kind === "join" ? " entered the dungeon" : kind === "leave" ? " left the dungeon" : " was slain";
+
+    const el = document.createElement("div");
+    el.className = `toast ${kind}`;
+    const who = document.createElement("span");
+    who.className = "who";
+    who.textContent = name;
+    el.append(who, document.createTextNode(suffix));
+    container.appendChild(el);
+
+    // Next frame so the initial (hidden) styles apply before transitioning in.
+    requestAnimationFrame(() => el.classList.add("show"));
+    window.setTimeout(() => {
+      el.classList.remove("show");
+      el.addEventListener("transitionend", () => el.remove(), { once: true });
+    }, 2600);
   }
 
   private setDeathOverlay(dead: boolean) {
