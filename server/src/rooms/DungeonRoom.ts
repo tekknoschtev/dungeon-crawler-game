@@ -37,6 +37,12 @@ import {
   pickAggroTarget,
   type AggroCandidate,
 } from "./logic";
+import {
+  COLORS,
+  SELECTABLE_COLORS,
+  HERO_SPRITES,
+  DEFAULT_HERO_SPRITE,
+} from "./heroAppearance";
 
 // Friendly join codes: 4 chars, no ambiguous glyphs (0/O, 1/I/L). Short enough
 // to read aloud or type on a phone; ~707k combinations is plenty for the handful
@@ -89,17 +95,9 @@ interface MobAI {
   wanderDy: number;
 }
 
-// Distinct hero colors. Players pick one in the lobby (validated against this
-// allowlist); unrecognised/absent picks fall back to round-robin assignment.
-// The client lobby mirrors this list (HERO_COLORS in lobby.ts) — keep them in sync.
-const COLORS = ["#ff5d73", "#4ec9ff", "#ffd65c", "#7cf36b", "#c08bff", "#ff9f45"];
-
-// Selectable hero bodies — Tiny Dungeon sheet frames (the humanoid characters at
-// #84–88 and #96–100). Picked in the lobby, tinted by the chosen color. The
-// client lobby mirrors this list (HERO_SPRITES in lobby.ts) — keep them in sync.
-// 96 (the armored knight) is the default for an unrecognised/absent pick.
-const HERO_SPRITES = [84, 85, 86, 87, 88, 96, 97, 98, 99, 100];
-const DEFAULT_HERO_SPRITE = 96;
+// Hero appearance (colors + body sprites) lives in ./heroAppearance — the
+// canonical, server-authoritative lists, imported above and shared with the
+// client lobby so the two can't drift.
 
 export class DungeonRoom extends Room<{ state: DungeonState }> {
   maxClients = 4;
@@ -197,7 +195,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     player.maxHp = PLAYER_MAX_HP;
     // Honor the lobby's color pick if it's a known one; otherwise hand out the
     // next round-robin color (advancing the cursor only when we actually use it).
-    if (isAllowedColor(options.color, COLORS)) {
+    if (isAllowedColor(options.color, SELECTABLE_COLORS)) {
       player.color = options.color!;
     } else {
       player.color = COLORS[this.colorIndex % COLORS.length];
