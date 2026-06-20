@@ -125,6 +125,7 @@ interface PlayerView {
   y: number;
   name: string;
   color: string;
+  sprite: number; // Tiny Dungeon frame for this hero's body (tinted by color)
   hp: number;
   maxHp: number;
   healCharges: number; // stacked heal potions on hand
@@ -409,7 +410,7 @@ export class GameScene extends Phaser.Scene {
     const colorNum = Phaser.Display.Color.HexStringToColor(player.color).color;
 
     const sprite = this.add
-      .image(player.x, player.y, TILES_KEY, FRAME_HERO)
+      .image(player.x, player.y, TILES_KEY, player.sprite || FRAME_HERO)
       .setDisplaySize(TILE, TILE)
       .setTint(colorNum)
       .setDepth(10);

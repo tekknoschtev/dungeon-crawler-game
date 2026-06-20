@@ -9,6 +9,10 @@ import { Schema, MapSchema, type } from "@colyseus/schema";
 export class Player extends Schema {
   @type("string") name: string = "";
   @type("string") color: string = "#ffffff";
+  // Tiny Dungeon sheet frame index for this hero's body (picked in the lobby,
+  // tinted by `color`). Validated against an allowlist server-side; see
+  // HERO_SPRITES in DungeonRoom.
+  @type("uint8") sprite: number = 96;
   @type("number") x: number = 0;
   @type("number") y: number = 0;
   @type("number") hp: number = 100;

@@ -10,6 +10,7 @@ import {
   mobDamageAfterDefense,
   regenHp,
   isAllowedColor,
+  isAllowedSprite,
   pickAggroTarget,
   type LootTarget,
   type LootBuffs,
@@ -163,6 +164,22 @@ describe("isAllowedColor", () => {
     expect(isAllowedColor(undefined, palette)).toBe(false);
     expect(isAllowedColor("red", palette)).toBe(false);
     expect(isAllowedColor("javascript:alert(1)", palette)).toBe(false);
+  });
+});
+
+describe("isAllowedSprite", () => {
+  const frames = [84, 96, 100];
+
+  it("accepts a frame in the allowlist", () => {
+    expect(isAllowedSprite(96, frames)).toBe(true);
+  });
+
+  it("rejects a frame not in the allowlist", () => {
+    expect(isAllowedSprite(7, frames)).toBe(false);
+  });
+
+  it("rejects undefined (absent pick)", () => {
+    expect(isAllowedSprite(undefined, frames)).toBe(false);
   });
 });
 

@@ -153,6 +153,15 @@ export function isAllowedColor(color: string | undefined, palette: readonly stri
   return color !== undefined && palette.includes(color);
 }
 
+/**
+ * True if `sprite` is one of the allowed hero frame indices. Same allowlist
+ * guard as `isAllowedColor`, but for the lobby's hero-body pick — keeps a
+ * hand-crafted client from setting `Player.sprite` to an arbitrary tile.
+ */
+export function isAllowedSprite(sprite: number | undefined, frames: readonly number[]): boolean {
+  return sprite !== undefined && frames.includes(sprite);
+}
+
 // --- Passive regen -----------------------------------------------------
 
 /**
