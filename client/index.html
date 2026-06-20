@@ -248,6 +248,62 @@
       #hud[hidden] {
         display: none;
       }
+      /* --- Run HUD: floor + pressure (top-left, clear of the centered share bar) --- */
+      #run-hud {
+        position: fixed;
+        top: 8px;
+        left: 8px;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 10px;
+        background: rgba(21, 23, 31, 0.8);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        font-size: 12px;
+        pointer-events: none;
+      }
+      #run-hud[hidden] {
+        display: none;
+      }
+      #run-depth {
+        color: #e6e9ef;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+      }
+      .heat-bar {
+        display: inline-block;
+        width: 80px;
+        height: 7px;
+        background: #2a2e3a;
+        border-radius: 4px;
+        overflow: hidden;
+      }
+      #run-heat-fill {
+        display: block;
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #4ec9ff 0%, #ffd65c 60%, #ff5d73 100%);
+        transition: width 200ms linear;
+      }
+      #descend-hint {
+        position: fixed;
+        top: 50px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10;
+        padding: 4px 10px;
+        background: rgba(13, 30, 28, 0.85);
+        border: 1px solid #2f6f66;
+        border-radius: 8px;
+        color: #9ffff0;
+        font-size: 12px;
+        pointer-events: none;
+      }
+      #descend-hint[hidden] {
+        display: none;
+      }
       .hud-hp {
         display: flex;
         align-items: center;
@@ -436,6 +492,14 @@
 
     <!-- Transient join/leave toasts (populated by GameScene). -->
     <div id="toasts" aria-live="polite"></div>
+
+    <!-- Run HUD: current floor + the floor's rising pressure ("heat"). -->
+    <div id="run-hud" hidden>
+      <span id="run-depth">Floor 1</span>
+      <span class="heat-bar" title="floor pressure"><i id="run-heat-fill"></i></span>
+    </div>
+    <!-- Shown while a hero stands on the descent exit. -->
+    <div id="descend-hint" hidden>▼ Hold here to descend</div>
 
     <!-- In-game HUD: local hero's health + loot haul by rarity. -->
     <div id="hud" hidden>

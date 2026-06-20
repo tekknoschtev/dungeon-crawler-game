@@ -100,6 +100,7 @@ const HUD_DEPTH = 1000;
 const FRAME_SLIME = 108; // Tiny Dungeon green slime
 const MOB_DEPTH = 8; // mobs render just under heroes (depth 10)
 const LOOT_DEPTH = 5;
+const EXIT_DEPTH = 4; // descent beacon: above the floor, below loot/mobs
 const LOOT_GLOW_DEPTH = 4;
 const ATTACK_COOLDOWN_MS = 450; // client throttle; mirrors the server cooldown
 const SWING_RADIUS = 26; // world px of the local swing ring (feedback only)
@@ -176,6 +177,7 @@ interface MapMessage {
   height: number;
   grid: number[][];
   props: { x: number; y: number; frame: number }[]; // solid furniture (server-placed)
+  exit: { x: number; y: number }; // descent point in TILE coords
 }
 
 /** Per-player visual entity on the client. */
@@ -223,6 +225,18 @@ export class GameScene extends Phaser.Scene {
 
   private mapLayer!: Phaser.GameObjects.Container;
   private statusText!: Phaser.GameObjects.Text;
+
+  // Descent exit: world-space beacon + an off-screen edge arrow pointing to it.
+  private exitX = 0;
+  private exitY = 0;
+  private exitMarker?: Phaser.GameObjects.Container;
+  private edgeArrow?: Phaser.GameObjects.Triangle;
+  // Throttle the depth/heat HUD so we only touch the DOM when a value changes.
+  private lastDepthShown = -1;
+  private lastHeatShown = -1;
+  // True between the server's "descend" signal and the next floor's map arriving,
+  // so buildMap knows to fade back in (the descent swaps floors under black).
+  private descending = false;
 
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
@@ -324,6 +338,13 @@ export class GameScene extends Phaser.Scene {
     this.statusText.setVisible(false);
 
     this.room.onMessage<MapMessage>("map", (data) => this.buildMap(data));
+
+    // Descent: the server signals just before swapping floors, so we fade to black
+    // here and fade back in once the next floor's map arrives (see buildMap).
+    this.room.onMessage("descend", () => {
+      this.descending = true;
+      this.cameras.main.fadeOut(250, 0, 0, 0);
+    });
 
     this.localId = this.room.sessionId;
     const $ = getStateCallbacks(this.room);
@@ -844,6 +865,141 @@ export class GameScene extends Phaser.Scene {
     for (const p of data.props) {
       this.addCell(p.x * t, p.y * t, t, p.frame);
     }
+
+    // Descent beacon. buildMap re-runs on every floor (the server re-sends "map"
+    // on descend), so rebuild the marker each time at the new exit.
+    this.exitX = data.exit.x * t + t / 2;
+    this.exitY = data.exit.y * t + t / 2;
+    this.buildExitMarker(t);
+
+    // If this map arrived from a descent, the swap happened under black. Snap the
+    // heroes + camera onto their new spawns so the reveal doesn't show them sliding
+    // in from their old-floor spots, hold black briefly to let the position patch
+    // settle, then fade the new floor in. (No-op on floor 1, where descending=false.)
+    if (this.descending) {
+      this.descending = false;
+      this.snapHeroesToTargets();
+      this.time.delayedCall(180, () => {
+        this.snapHeroesToTargets(); // catch the spawn patch if it landed just after
+        this.cameras.main.fadeIn(600, 0, 0, 0);
+      });
+    }
+  }
+
+  /**
+   * Place every hero sprite (and the camera) exactly on its target. Used on a
+   * floor swap so the fade-in reveals everyone already in place rather than the
+   * normal update() lerp sliding them across the new floor.
+   */
+  private snapHeroesToTargets() {
+    this.entities.forEach((e) => {
+      e.sprite.x = e.target.x;
+      e.sprite.y = e.target.y;
+      e.label.x = e.sprite.x;
+      e.label.y = e.sprite.y - LABEL_OFFSET;
+    });
+    const me = this.entities.get(this.localId);
+    if (me) this.cameras.main.centerOn(me.sprite.x, me.sprite.y);
+  }
+
+  /**
+   * The descent point: a trapdoor opening into a ladder shaft, composed from
+   * shapes (Tiny Dungeon has no stairs tile). Rebuilt per floor; a soft torch-lit
+   * glow pulses so it's findable without reading like a UI arrow.
+   */
+  private buildExitMarker(t: number) {
+    this.exitMarker?.destroy();
+    const glow = this.add.circle(0, 0, t * 0.72, 0xffb24d, 0.14);
+    const g = this.add.graphics();
+    const r = t * 0.42;
+    const lw = Math.max(1, t * 0.07);
+    // Dark shaft opening with a wooden lip (the open trapdoor).
+    g.fillStyle(0x0d0b09, 1).fillRoundedRect(-r, -r, r * 2, r * 2, 3);
+    g.lineStyle(Math.max(1, t * 0.09), 0x6b4a2b, 1).strokeRoundedRect(-r, -r, r * 2, r * 2, 3);
+    // Ladder rails + rungs descending into the dark (lower rungs dimmer = depth).
+    const railX = t * 0.16;
+    g.lineStyle(lw, 0xc79a5b, 1);
+    g.lineBetween(-railX, -r * 0.7, -railX, r * 0.85);
+    g.lineBetween(railX, -r * 0.7, railX, r * 0.85);
+    for (const rung of [
+      { y: -r * 0.35, color: 0xd9b072 },
+      { y: r * 0.05, color: 0xb07a45 },
+      { y: r * 0.45, color: 0x7a5230 },
+    ]) {
+      g.lineStyle(lw, rung.color, 1).lineBetween(-railX, rung.y, railX, rung.y);
+    }
+    const cont = this.add.container(this.exitX, this.exitY, [glow, g]).setDepth(EXIT_DEPTH);
+    this.exitMarker = cont;
+    this.tweens.add({
+      targets: glow,
+      alpha: { from: 0.22, to: 0.07 },
+      duration: 1100,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.inOut",
+    });
+
+    // The off-screen wayfinder arrow (created once, reused across floors).
+    if (!this.edgeArrow) {
+      this.edgeArrow = this.add
+        .triangle(0, 0, 0, -11, 9, 9, -9, 9, 0xffb24d, 0.95)
+        .setScrollFactor(0)
+        .setDepth(HUD_DEPTH)
+        .setVisible(false);
+    }
+  }
+
+  /** Update the Floor/heat readout (throttled to actual changes). */
+  private updateRunHud() {
+    const st = this.room?.state as { depth?: number; heat?: number } | undefined;
+    if (!st) return;
+    const depth = st.depth ?? 1;
+    if (depth !== this.lastDepthShown) {
+      this.lastDepthShown = depth;
+      const el = document.getElementById("run-depth");
+      if (el) el.textContent = `Floor ${depth}`;
+      const hud = document.getElementById("run-hud");
+      if (hud) hud.hidden = false;
+    }
+    const pct = Math.round((st.heat ?? 0) * 100);
+    if (pct !== this.lastHeatShown) {
+      this.lastHeatShown = pct;
+      const fill = document.getElementById("run-heat-fill");
+      if (fill) fill.style.width = `${pct}%`;
+    }
+  }
+
+  /**
+   * Point the player toward the exit: a "hold to descend" hint when standing on
+   * it, and a screen-edge arrow toward it while it's off-camera.
+   */
+  private updateExitNudge() {
+    const me = this.entities.get(this.localId);
+    const hint = document.getElementById("descend-hint");
+    if (!me || !this.edgeArrow) {
+      this.edgeArrow?.setVisible(false);
+      if (hint) hint.hidden = true;
+      return;
+    }
+
+    const onExit = Phaser.Math.Distance.Between(me.sprite.x, me.sprite.y, this.exitX, this.exitY) <= 16;
+    if (hint) hint.hidden = !onExit;
+
+    const cam = this.cameras.main;
+    const view = cam.worldView;
+    if (view.contains(this.exitX, this.exitY)) {
+      this.edgeArrow.setVisible(false);
+      return;
+    }
+    // Exit is off-camera → pin an arrow to the screen edge, aimed at it.
+    const cx = cam.width / 2;
+    const cy = cam.height / 2;
+    const sx = ((this.exitX - view.x) / view.width) * cam.width;
+    const sy = ((this.exitY - view.y) / view.height) * cam.height;
+    const ang = Math.atan2(sy - cy, sx - cx);
+    const px = cx + Math.cos(ang) * (cx - 46);
+    const py = cy + Math.sin(ang) * (cy - 46);
+    this.edgeArrow.setVisible(true).setPosition(px, py).setRotation(ang + Math.PI / 2);
   }
 
   /** Add one map tile image to the map layer and return it. */
@@ -891,6 +1047,9 @@ export class GameScene extends Phaser.Scene {
       m.sprite.y = Phaser.Math.Linear(m.sprite.y, m.target.y, k);
       this.drawHpBar(m.hpBar, m.sprite.x, m.sprite.y, m.hp, m.maxHp);
     });
+
+    this.updateRunHud();
+    this.updateExitNudge();
   }
 
   private sendInput() {

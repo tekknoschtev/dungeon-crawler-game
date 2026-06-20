@@ -14,11 +14,13 @@ import {
   MOB_ATTACK_COOLDOWN,
   MOB_AGGRO_RANGE,
   MOB_ATTACK_RANGE,
-  MOB_TARGET_COUNT,
-  MOB_RESPAWN_INTERVAL,
+  MOB_DAMAGE,
   PICKUP_RANGE,
   HEAL_PCT,
   MAX_DEATH_MARKERS,
+  EXIT_RADIUS,
+  DESCEND_CHANNEL_TIME,
+  DESCEND_FADE_MS,
 } from "./tuning";
 import {
   dist,
@@ -35,6 +37,11 @@ import {
   isAllowedColor,
   isAllowedSprite,
   pickAggroTarget,
+  heatLevel,
+  targetMobCount,
+  spawnInterval,
+  scaleMobHp,
+  scaleMobDamage,
   type AggroCandidate,
 } from "./logic";
 import {
@@ -118,6 +125,10 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   private markerIds: string[] = []; // death-marker ids in insertion order (for culling)
   private now = 0; // accumulated simulation time in seconds
   private nextMobSpawnAt = 0;
+  private baseSeed = 0; // room seed; each floor derives its layout from this + depth
+  private floorStartAt = 0; // sim time the current floor began (drives the pressure ramp)
+  private descendProgress = 0; // s a hero has held the exit toward the descend channel
+  private descending = false; // true during the fade-out window before the floor swaps
 
   async onCreate(options: { code?: string } = {}) {
     this.state = new DungeonState();
@@ -130,21 +141,10 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.state.code = code;
     this.setMetadata({ code });
 
-    // One random seed per room drives the whole layout. Stored in state so the
-    // exact dungeon is reproducible and (later) shareable by code.
-    this.state.seed = (Math.random() * 0x100000000) >>> 0;
-    this.map = loadMap(this.state.seed);
-
-    // Bake props into a collision-only grid (walls + prop tiles solid).
-    this.collision = this.map.grid.map((row) => row.slice());
-    for (const p of this.map.props) this.collision[p.y][p.x] = 1;
-
-    // Cache every walkable tile once (floor minus props), for mob/loot spawns.
-    for (let y = 0; y < this.map.height; y++) {
-      for (let x = 0; x < this.map.width; x++) {
-        if (this.collision[y][x] === 0) this.floors.push({ x, y });
-      }
-    }
+    // One random base seed per room; each floor's layout derives from it + depth
+    // (see enterFloor), so the dungeon is reproducible and (later) shareable by code.
+    this.baseSeed = (Math.random() * 0x100000000) >>> 0;
+    this.enterFloor(1);
 
     // Receive movement intent from a client. We sanitize to plain booleans so a
     // malicious client can't smuggle anything weird into the simulation.
@@ -166,19 +166,9 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
 
     // The client requests the map once its renderer is ready (handlers wired),
     // rather than us pushing it in onJoin — that one-time payload would otherwise
-    // be missed while the client finishes booting (loading art, etc.).
-    this.onMessage("ready", (client) => {
-      client.send("map", {
-        tile: this.map.tile,
-        width: this.map.width,
-        height: this.map.height,
-        grid: this.map.grid,
-        props: this.map.props,
-      });
-    });
-
-    // Seed the initial mob population.
-    for (let i = 0; i < MOB_TARGET_COUNT; i++) this.spawnMob();
+    // be missed while the client finishes booting (loading art, etc.). On descend
+    // the server broadcasts a fresh "map" to everyone (see enterFloor).
+    this.onMessage("ready", (client) => client.send("map", this.mapPayload()));
 
     // Fixed-step authoritative simulation. The callback receives delta in ms.
     this.setSimulationInterval((deltaMs) => this.update(deltaMs));
@@ -221,6 +211,106 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.inputs.delete(client.sessionId);
     this.combat.delete(client.sessionId);
     console.log(`Left: ${client.sessionId}. Players: ${this.clients.length}`);
+  }
+
+  // --- Floors ------------------------------------------------------------
+
+  /**
+   * (Re)generate and enter floor `depth`. Used for the initial floor and every
+   * descent: loads a fresh layout (deterministic from baseSeed + depth), rebuilds
+   * collision + the walkable-tile cache, clears the old floor's mobs/loot, resets
+   * the pressure ramp, repositions any players to the new spawns, seeds the calm
+   * starting population, and broadcasts the new map to clients.
+   */
+  private enterFloor(depth: number) {
+    this.state.depth = depth;
+    // Mix baseSeed with depth so each floor has its own reproducible layout.
+    const seed = (this.baseSeed ^ Math.imul(depth, 0x9e3779b1)) >>> 0;
+    this.state.seed = seed;
+    this.map = loadMap(seed);
+
+    // Bake props into a collision-only grid (walls + prop tiles solid).
+    this.collision = this.map.grid.map((row) => row.slice());
+    for (const p of this.map.props) this.collision[p.y][p.x] = 1;
+
+    // Cache every walkable tile once (floor minus props), for mob/loot spawns.
+    this.floors = [];
+    for (let y = 0; y < this.map.height; y++) {
+      for (let x = 0; x < this.map.width; x++) {
+        if (this.collision[y][x] === 0) this.floors.push({ x, y });
+      }
+    }
+
+    // Fresh floor: drop the previous floor's mobs, loot, and death markers (whose
+    // coords are meaningless on the new layout), and reset the ramp.
+    this.state.mobs.clear();
+    this.mobAI.clear();
+    this.state.loot.clear();
+    this.state.markers.clear();
+    this.markerIds = [];
+    this.floorStartAt = this.now;
+    this.nextMobSpawnAt = this.now;
+    this.descendProgress = 0;
+    this.state.heat = 0;
+
+    // Move everyone to the new spawns (a no-op on the very first floor — players
+    // join afterwards). HP/buffs carry across; the pressure reset is the relief.
+    let i = 0;
+    this.state.players.forEach((player) => {
+      const spawn = this.map.spawns[i % this.map.spawns.length];
+      player.x = spawn.x;
+      player.y = spawn.y;
+      i++;
+    });
+
+    // Seed the calm starting population so the floor isn't empty on arrival.
+    const target = targetMobCount(0, depth);
+    for (let n = 0; n < target; n++) this.spawnMob();
+
+    // Push the new geometry to everyone (no-op when no one's connected yet).
+    this.broadcast("map", this.mapPayload());
+  }
+
+  /** The map payload clients render (geometry + props + the descent exit). */
+  private mapPayload() {
+    return {
+      tile: this.map.tile,
+      width: this.map.width,
+      height: this.map.height,
+      grid: this.map.grid,
+      props: this.map.props,
+      exit: this.map.exit,
+    };
+  }
+
+  /**
+   * Descent channel: while any living hero stands on the exit, charge a short
+   * timer; when it fills, the whole party drops to the next floor. Stepping off
+   * cancels it. Co-op-friendly — anyone can initiate, nobody has to clear first.
+   */
+  private updateDescent(dt: number) {
+    if (this.descending) return; // mid fade-out; the floor swap is already scheduled
+    const ex = this.map.exit.x * TILE + TILE / 2;
+    const ey = this.map.exit.y * TILE + TILE / 2;
+    let onExit = false;
+    this.state.players.forEach((p) => {
+      if (p.hp > 0 && dist(p.x, p.y, ex, ey) <= EXIT_RADIUS) onExit = true;
+    });
+    if (!onExit) {
+      this.descendProgress = 0;
+      return;
+    }
+    this.descendProgress += dt;
+    if (this.descendProgress >= DESCEND_CHANNEL_TIME) {
+      // Tell clients to fade to black, then swap floors under cover of it so the
+      // reposition is unseen. enterFloor resets the channel + ramp.
+      this.descending = true;
+      this.broadcast("descend");
+      this.clock.setTimeout(() => {
+        this.enterFloor(this.state.depth + 1);
+        this.descending = false;
+      }, DESCEND_FADE_MS);
+    }
   }
 
   // --- Combat ------------------------------------------------------------
@@ -272,8 +362,11 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     const mob = new Mob();
     mob.x = tile.x * TILE + TILE / 2;
     mob.y = tile.y * TILE + TILE / 2;
-    mob.hp = MOB_MAX_HP;
-    mob.maxHp = MOB_MAX_HP;
+    // Deeper floors field tougher mobs (HP scales with depth; damage is scaled
+    // at hit time in updateMob).
+    const hp = scaleMobHp(MOB_MAX_HP, this.state.depth);
+    mob.hp = hp;
+    mob.maxHp = hp;
     mob.kind = "slime";
     const id = `m${this.mobSeq++}`;
     this.state.mobs.set(id, mob);
@@ -294,7 +387,8 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
           ai.attackReadyAt = this.now + MOB_ATTACK_COOLDOWN;
           mob.attackTick = (mob.attackTick + 1) % 256; // signal a strike to clients
           const tc = this.combat.get(aggro.id);
-          const dmg = mobDamageAfterDefense(target.defenseBuff > 0, tc ? tc.defenseReduce : 0);
+          const base = scaleMobDamage(MOB_DAMAGE, this.state.depth);
+          const dmg = mobDamageAfterDefense(target.defenseBuff > 0, tc ? tc.defenseReduce : 0, base);
           target.hp = Math.max(0, target.hp - dmg);
         }
       } else {
@@ -370,6 +464,11 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     const dt = deltaMs / 1000;
     this.now += dt;
 
+    // Pressure ramps with time on the floor (reset on descend). Surface it to the
+    // HUD as `heat` and drive the mob population + top-up cadence off the same value.
+    const heat = heatLevel(this.now - this.floorStartAt);
+    this.state.heat = heat;
+
     this.state.players.forEach((player, sessionId) => {
       const c = this.combat.get(sessionId);
       if (!c) return;
@@ -436,11 +535,15 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     });
     this.state.mobs.forEach((mob, id) => this.updateMob(mob, id, dt, livingPlayers));
 
-    // Top the population back up over time as mobs are killed.
-    if (this.state.mobs.size < MOB_TARGET_COUNT && this.now >= this.nextMobSpawnAt) {
+    // Top the population up toward the pressure target — the hotter the floor, the
+    // higher the target and the faster the top-ups.
+    if (this.state.mobs.size < targetMobCount(heat, this.state.depth) && this.now >= this.nextMobSpawnAt) {
       this.spawnMob();
-      this.nextMobSpawnAt = this.now + MOB_RESPAWN_INTERVAL;
+      this.nextMobSpawnAt = this.now + spawnInterval(heat);
     }
+
+    // Let the party descend by holding the exit.
+    this.updateDescent(dt);
   }
 
   private respawn(player: Player, c: Combat) {

@@ -14,6 +14,11 @@ import {
   isAllowedColor,
   isAllowedSprite,
   pickAggroTarget,
+  heatLevel,
+  targetMobCount,
+  spawnInterval,
+  scaleMobHp,
+  scaleMobDamage,
   type LootTarget,
   type LootBuffs,
 } from "./logic";
@@ -218,6 +223,49 @@ describe("isAllowedColor", () => {
     expect(isAllowedColor(undefined, palette)).toBe(false);
     expect(isAllowedColor("red", palette)).toBe(false);
     expect(isAllowedColor("javascript:alert(1)", palette)).toBe(false);
+  });
+});
+
+describe("heatLevel", () => {
+  it("is 0 on arrival, 1 at the ramp time, and clamps past it", () => {
+    expect(heatLevel(0, 100)).toBe(0);
+    expect(heatLevel(50, 100)).toBeCloseTo(0.5);
+    expect(heatLevel(100, 100)).toBe(1);
+    expect(heatLevel(500, 100)).toBe(1); // clamped, never overshoots
+  });
+});
+
+describe("targetMobCount", () => {
+  it("lerps from base (calm) to max (hot) with heat, on floor 1", () => {
+    expect(targetMobCount(0, 1, 6, 22, 1.5, 30)).toBe(6);
+    expect(targetMobCount(1, 1, 6, 22, 1.5, 30)).toBe(22);
+    expect(targetMobCount(0.5, 1, 6, 22, 1.5, 30)).toBe(14); // (6+22)/2
+  });
+
+  it("adds a per-depth bonus (depth is 1-based)", () => {
+    expect(targetMobCount(0, 1, 6, 22, 2, 30)).toBe(6); // floor 1: no bonus
+    expect(targetMobCount(0, 3, 6, 22, 2, 30)).toBe(10); // +2 per floor below 1 → +4
+  });
+
+  it("never exceeds the hard cap", () => {
+    expect(targetMobCount(1, 10, 6, 22, 5, 30)).toBe(30);
+  });
+});
+
+describe("spawnInterval", () => {
+  it("is long when calm and short when hot", () => {
+    expect(spawnInterval(0, 5, 1)).toBe(5);
+    expect(spawnInterval(1, 5, 1)).toBe(1);
+    expect(spawnInterval(0.5, 5, 1)).toBe(3);
+  });
+});
+
+describe("depth stat scaling", () => {
+  it("leaves floor 1 unchanged and scales deeper floors", () => {
+    expect(scaleMobHp(30, 1, 0.15)).toBe(30);
+    expect(scaleMobHp(30, 3, 0.15)).toBe(39); // 30 * (1 + 0.3)
+    expect(scaleMobDamage(8, 1, 0.1)).toBe(8);
+    expect(scaleMobDamage(8, 6, 0.1)).toBeCloseTo(12); // 8 * (1 + 0.5)
   });
 });
 

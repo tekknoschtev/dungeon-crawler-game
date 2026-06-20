@@ -21,6 +21,15 @@ import {
   WEAPON_TOTAL,
   rarityByName,
   weaponByName,
+  PRESSURE_RAMP_TIME,
+  PRESSURE_BASE_TARGET,
+  PRESSURE_MAX_TARGET,
+  PRESSURE_SPAWN_INTERVAL_CALM,
+  PRESSURE_SPAWN_INTERVAL_HOT,
+  PRESSURE_TARGET_HARD_CAP,
+  DEPTH_PRESSURE_BONUS,
+  DEPTH_HP_SCALE,
+  DEPTH_DAMAGE_SCALE,
   type Rarity,
   type Weapon,
 } from "./tuning";
@@ -158,9 +167,17 @@ export function playerAttackDamage(attackBuffActive: boolean, attackMult: number
   return PLAYER_ATTACK_DAMAGE * (attackBuffActive ? attackMult : 1);
 }
 
-/** Damage a mob hit deals to a player after an active defense buff soaks some. */
-export function mobDamageAfterDefense(defenseBuffActive: boolean, defenseReduce: number): number {
-  return MOB_DAMAGE * (1 - (defenseBuffActive ? defenseReduce : 0));
+/**
+ * Damage a mob hit deals to a player after an active defense buff soaks some.
+ * `baseDamage` defaults to the flat constant but lets the caller pass a
+ * depth-scaled value (see scaleMobDamage) so deeper floors hit harder.
+ */
+export function mobDamageAfterDefense(
+  defenseBuffActive: boolean,
+  defenseReduce: number,
+  baseDamage: number = MOB_DAMAGE
+): number {
+  return baseDamage * (1 - (defenseBuffActive ? defenseReduce : 0));
 }
 
 /**
@@ -264,4 +281,54 @@ export function pickAggroTarget(
     }
   }
   return bestId === "" ? null : { id: bestId, dist: best };
+}
+
+// --- Pressure & depth --------------------------------------------------
+// The per-floor difficulty clock. `heatLevel` turns time-on-floor into a 0..1
+// ramp; the mob population target and top-up cadence are both read off that heat
+// (so they climb together), and `depth` shifts everything tougher. All pure so
+// the curve can be unit-tested without a clock — DungeonRoom feeds in elapsed
+// time and the current depth each tick.
+
+const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+
+/** Floor "heat" in [0, 1]: how far the pressure ramp has climbed since arrival. */
+export function heatLevel(floorElapsed: number, rampTime: number = PRESSURE_RAMP_TIME): number {
+  return clamp01(floorElapsed / rampTime);
+}
+
+/**
+ * Live mob population the floor wants right now: a heat-driven lerp from the calm
+ * baseline to the max, plus a per-depth bonus, capped. `depth` is 1-based.
+ */
+export function targetMobCount(
+  heat: number,
+  depth: number,
+  base: number = PRESSURE_BASE_TARGET,
+  max: number = PRESSURE_MAX_TARGET,
+  depthBonus: number = DEPTH_PRESSURE_BONUS,
+  hardCap: number = PRESSURE_TARGET_HARD_CAP
+): number {
+  const want = lerp(base, max, clamp01(heat)) + depthBonus * (depth - 1);
+  return Math.min(hardCap, Math.round(want));
+}
+
+/** Seconds between top-up spawns: long when calm, short when hot. */
+export function spawnInterval(
+  heat: number,
+  calm: number = PRESSURE_SPAWN_INTERVAL_CALM,
+  hot: number = PRESSURE_SPAWN_INTERVAL_HOT
+): number {
+  return lerp(calm, hot, clamp01(heat));
+}
+
+/** Mob max HP scaled for depth (1-based; floor 1 unchanged), rounded to a whole HP. */
+export function scaleMobHp(baseHp: number, depth: number, scale: number = DEPTH_HP_SCALE): number {
+  return Math.round(baseHp * (1 + scale * (depth - 1)));
+}
+
+/** Mob contact damage scaled for depth (1-based; floor 1 unchanged). */
+export function scaleMobDamage(baseDmg: number, depth: number, scale: number = DEPTH_DAMAGE_SCALE): number {
+  return baseDmg * (1 + scale * (depth - 1));
 }

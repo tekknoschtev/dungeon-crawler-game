@@ -74,6 +74,11 @@ export class DeathMarker extends Schema {
 export class DungeonState extends Schema {
   @type("number") seed: number = 0;
   @type("string") code: string = "";
+  // Current floor (1-based). Drives depth scaling + the HUD; bumped on descend.
+  @type("uint8") depth: number = 1;
+  // Per-floor pressure ramp surfaced to the HUD, 0 (just arrived) → 1 (max heat).
+  // Derived each tick from time-on-floor; resets to 0 on descend.
+  @type("number") heat: number = 0;
   @type({ map: Player }) players = new MapSchema<Player>();
   @type({ map: Mob }) mobs = new MapSchema<Mob>();
   @type({ map: Loot }) loot = new MapSchema<Loot>();
