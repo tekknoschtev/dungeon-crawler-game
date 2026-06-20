@@ -40,6 +40,11 @@ export const BUFF_DURATION = 9; // s — attack/defense buff length (longer: rar
 export const HEAL_PCT = 0.4; // fraction of max HP restored per quaffed potion
 export const MAX_HEAL_CHARGES = 5; // how many heal potions a hero can stockpile
 
+// --- Death markers -----------------------------------------------------
+// A tombstone left where a hero fell, tinted to their color. Synced state, so
+// cap it — old markers are culled oldest-first once there are more than this.
+export const MAX_DEATH_MARKERS = 24;
+
 export interface Rarity {
   name: string;
   weight: number;

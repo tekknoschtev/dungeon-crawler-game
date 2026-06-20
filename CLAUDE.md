@@ -74,8 +74,19 @@ client-only items are pure render/UX and need no new synced state.
   hero images depend on the M2 art pass having more than one hero frame.
 - **Sound effects** (client) — hits, pickups, level/door events. CC0/license-
   compatible only, logged in `ATTRIBUTION.md` like all assets.
-- **Floor variation** (client) — debris / texture variation so floors aren't
-  flat. Decorative only; keep it client-side, don't bloat the synced map.
+- **Floor variation** ✓ DONE (2026-06-19) — two parts. (1) Speckle/paved floor
+  variants (#49/#42) chosen by a deterministic `tileHash(x,y)` in
+  `GameScene.buildMap` — purely visual, client-side, no synced state. (2) Sparse
+  *collidable* furniture props (#63/#75/#73/#74/#82): placed **server-side** in
+  `map.ts` (`placeProps`, on room-edge tiles, with a connectivity guard so they
+  can't seal off a room), baked into a collision grid in `DungeonRoom`, kept off
+  mob/loot spawns, and sent to clients in the `map` message to render. The brown
+  rubble tiles (#12/#24/#25) were unusable — opaque backgrounds clash with the
+  tan floor.
+- **Death markers** ✓ DONE (2026-06-19) — a tombstone (#64) dropped where a hero
+  falls, tinted to their color. Unlike the decorative clutter this *is* server
+  state (`markers` MapSchema, capped at `MAX_DEATH_MARKERS`, culled oldest-first)
+  so late-joiners see the party's death history. Not collidable.
 - **Closeable doors** (server) — doors that can be shut to make a safe space to
   recover/pause. Real gameplay + map state — server-authoritative; extend the
   map/door state and simulation.

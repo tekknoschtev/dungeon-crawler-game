@@ -86,6 +86,18 @@ function pruneWallNubs(grid: number[][]): void {
   }
 }
 
+/**
+ * A piece of solid furniture (barrel, crate, anvil…) sitting on a floor tile.
+ * It's a real obstacle: the server adds it to collision and keeps mobs/loot off
+ * it, and the client renders the sprite. x/y are TILE coords; frame is the Tiny
+ * Dungeon sheet index.
+ */
+export interface Prop {
+  x: number;
+  y: number;
+  frame: number;
+}
+
 export interface LoadedMap {
   tile: number;
   width: number; // in tiles
@@ -94,6 +106,85 @@ export interface LoadedMap {
   grid: number[][];
   /** spawn points in pixel coordinates (tile centers), all on room floor */
   spawns: { x: number; y: number }[];
+  /** solid decorative props (collidable furniture) on floor tiles */
+  props: Prop[];
+}
+
+// Prop placement. Props go only on room-edge tiles (exactly one orthogonal wall
+// neighbor) so they never sit in a 1-wide corridor, and any candidate that would
+// wall off part of the dungeon is rejected (see placeProps). Kept sparse — they
+// block movement, so a dense scatter would make rooms annoying to cross.
+const PROP_CHANCE = 0.05;
+const PROP_FRAMES = [82, 63, 73, 74, 75]; // keg, crate stack, barrel, anvil, crates
+
+/**
+ * Deterministic [0, 1) hash of a tile coord + salt. Coordinate-only (no seed):
+ * props are a pure function of the grid, which is itself seed-deterministic, so
+ * the same seed still yields the same props — and the server sends the resolved
+ * list to clients, so everyone renders exactly what the server collides against.
+ */
+function coordHash(x: number, y: number, salt: number): number {
+  let h = (x * 374761393 + y * 668265263 + salt * 2147483647) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/** Count floor tiles reachable from `start`, treating `blocked` tiles as solid. */
+function reachableCount(
+  grid: number[][],
+  start: { x: number; y: number },
+  blocked: Set<string>
+): number {
+  const seen = new Set<string>();
+  const stack = [start];
+  while (stack.length) {
+    const { x, y } = stack.pop()!;
+    if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) continue;
+    const key = `${x},${y}`;
+    if (grid[y][x] !== 0 || blocked.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    stack.push({ x: x + 1, y }, { x: x - 1, y }, { x, y: y + 1 }, { x, y: y - 1 });
+  }
+  return seen.size;
+}
+
+/**
+ * Scatter solid props on room-edge floor tiles. Each accepted prop is added one
+ * at a time and kept only if the dungeon stays fully connected with it solid, so
+ * props can never trap a player or seal off a room. Deterministic for a grid.
+ */
+function placeProps(grid: number[][], spawn: { x: number; y: number }): Prop[] {
+  const isWall = (x: number, y: number) =>
+    x < 0 || y < 0 || x >= MAP_W || y >= MAP_H || grid[y][x] === 1;
+
+  let totalFloor = 0;
+  for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) if (grid[y][x] === 0) totalFloor++;
+
+  const blocked = new Set<string>();
+  const props: Prop[] = [];
+  for (let y = 0; y < MAP_H; y++) {
+    for (let x = 0; x < MAP_W; x++) {
+      if (grid[y][x] !== 0) continue;
+      const wallNeighbors =
+        (isWall(x, y - 1) ? 1 : 0) +
+        (isWall(x + 1, y) ? 1 : 0) +
+        (isWall(x, y + 1) ? 1 : 0) +
+        (isWall(x - 1, y) ? 1 : 0);
+      if (wallNeighbors !== 1) continue;
+      if (coordHash(x, y, 1) >= PROP_CHANCE) continue;
+
+      // Tentatively block it; reject if it would disconnect the floor.
+      const key = `${x},${y}`;
+      blocked.add(key);
+      if (reachableCount(grid, spawn, blocked) !== totalFloor - blocked.size) {
+        blocked.delete(key);
+        continue;
+      }
+      const frame = PROP_FRAMES[Math.floor(coordHash(x, y, 2) * PROP_FRAMES.length)];
+      props.push({ x, y, frame });
+    }
+  }
+  return props;
 }
 
 /**
@@ -163,5 +254,10 @@ export function loadMap(seed: number): LoadedMap {
     return { x: c.x * TILE + TILE / 2, y: c.y * TILE + TILE / 2 };
   });
 
-  return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns };
+  // Solid furniture on room edges. The connectivity guard floods from a known
+  // floor tile (the first room center), so it needs a room to exist.
+  const start = rooms.length > 0 ? roomCenter(rooms[0]) : { x: 1, y: 1 };
+  const props = placeProps(grid, start);
+
+  return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props };
 }

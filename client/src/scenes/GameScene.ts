@@ -7,7 +7,9 @@ import { MoveIntent, MOVE_INTENT_KEY } from "./UIScene";
 // no spacing, so a tile's frame index = row * 12 + column. See ATTRIBUTION.md.
 const TILES_KEY = "tiles";
 const TILE_SRC = 16; // source tile size in px (we scale up to the world TILE)
-const FRAME_FLOOR = 48; // plain stone floor (flat; seeded variation comes later)
+const FRAME_FLOOR = 48; // plain stone floor (the common case)
+const FRAME_FLOOR_SPECKLE = 49; // subtle pebble/sand debris — same tan base as #48
+const FRAME_FLOOR_PAVED = 42; // stone-slab accent (rarer, breaks up large floors)
 const FRAME_VOID = 0; // brown "rock/void" behind walls (deep interior)
 const FRAME_HERO = 96; // armored knight; tinted per player to tell heroes apart
 
@@ -55,6 +57,27 @@ const WALL_INNER_CORNER: Record<number, number> = {
 const WALL_SHADOW_COLOR = 0x000000;
 const WALL_SHADOW_ALPHA = 0.32;
 const WALL_SHADOW_H = 5; // px (in source/world tile space)
+
+// --- Decorative floor variation ----------------------------------------
+// Purely client-side render: each floor tile's texture is chosen by a
+// deterministic hash of its (x, y), so every co-op client renders the identical
+// floor with nothing added to the synced map. (Solid props are server-owned and
+// collidable — they arrive in the "map" message; see buildMap.)
+const SPECKLE_CHANCE = 0.12; // floor tiles that get the subtle speckle variant
+const PAVED_CHANCE = 0.03; // rarer stone-slab accent tiles
+const DECOR_DEPTH = 3; // markers: above floor (mapLayer=0), below loot (5)
+const FRAME_TOMBSTONE = 64; // rounded gravestone — used as a per-hero death marker
+
+/**
+ * Deterministic [0, 1) hash of a tile coord plus a salt (so we can make several
+ * independent rolls per tile). Stable across clients and reloads — same input,
+ * same output — which is what keeps every player's decoration identical.
+ */
+function tileHash(x: number, y: number, salt: number): number {
+  let h = (x * 374761393 + y * 668265263 + salt * 2147483647) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
 
 // Camera zoom so native 16px tiles render at a chunky-but-roomy size (≈32px
 // on screen). The world is much larger than the viewport, so the camera
@@ -125,11 +148,18 @@ interface LootView {
   category: string; // "heal" | "attack" | "defense"
 }
 
+interface MarkerView {
+  x: number;
+  y: number;
+  color: string; // the fallen hero's color
+}
+
 interface MapMessage {
   tile: number;
   width: number;
   height: number;
   grid: number[][];
+  props: { x: number; y: number; frame: number }[]; // solid furniture (server-placed)
 }
 
 /** Per-player visual entity on the client. */
@@ -172,6 +202,7 @@ export class GameScene extends Phaser.Scene {
   private entities = new Map<string, Entity>();
   private mobs = new Map<string, MobEntity>();
   private loot = new Map<string, LootEntity>();
+  private markers = new Map<string, Phaser.GameObjects.Image>(); // server-owned tombstones
   private localId = "";
 
   private mapLayer!: Phaser.GameObjects.Container;
@@ -285,6 +316,7 @@ export class GameScene extends Phaser.Scene {
       players: Map<string, PlayerView>;
       mobs: Map<string, MobView>;
       loot: Map<string, LootView>;
+      markers: Map<string, MarkerView>;
     };
 
     // onAdd fires synchronously for players already in the room (including us)
@@ -353,6 +385,11 @@ export class GameScene extends Phaser.Scene {
 
     $(state).loot.onAdd((l: LootView, id: string) => this.addLoot(l, id));
     $(state).loot.onRemove((_l: LootView, id: string) => this.removeLoot(id));
+
+    // Death markers fire onAdd for ones laid before we joined, so late-joiners see
+    // the party's history; the server caps the count and culls oldest-first.
+    $(state).markers.onAdd((m: MarkerView, id: string) => this.addMarker(m, id));
+    $(state).markers.onRemove((_m: MarkerView, id: string) => this.removeMarker(id));
 
     this.room.onError((code, message) => {
       console.error("Room error:", code, message);
@@ -484,6 +521,40 @@ export class GameScene extends Phaser.Scene {
       },
     });
     this.loot.delete(id);
+  }
+
+  /**
+   * Render a death marker (server-owned tombstone) tinted to the fallen hero's
+   * color, with a brief settle-in pop. onAdd also replays markers laid before we
+   * joined, so late-joiners see the party's history.
+   */
+  private addMarker(m: MarkerView, id: string) {
+    const colorNum = Phaser.Display.Color.HexStringToColor(m.color).color;
+    const stone = this.add
+      .image(m.x, m.y, TILES_KEY, FRAME_TOMBSTONE)
+      .setDisplaySize(TILE, TILE)
+      .setTint(colorNum)
+      .setDepth(DECOR_DEPTH);
+
+    const baseScale = stone.scaleX;
+    stone.setScale(baseScale * 0.3);
+    this.tweens.add({
+      targets: stone,
+      scaleX: baseScale,
+      scaleY: baseScale,
+      duration: 220,
+      ease: "Back.easeOut",
+    });
+
+    this.markers.set(id, stone);
+  }
+
+  private removeMarker(id: string) {
+    const stone = this.markers.get(id);
+    if (!stone) return;
+    this.tweens.killTweensOf(stone);
+    stone.destroy();
+    this.markers.delete(id);
   }
 
   /** Redraw a small floating HP bar above an entity (hidden when full or dead). */
@@ -676,8 +747,16 @@ export class GameScene extends Phaser.Scene {
     for (let y = 0; y < data.height; y++) {
       for (let x = 0; x < data.width; x++) {
         if (!isWall(x, y)) {
-          // Floor.
-          this.addCell(x * t, y * t, t, FRAME_FLOOR);
+          // Floor — deterministic texture variation so large floors don't read flat.
+          const v = tileHash(x, y, 0);
+          const floorFrame =
+            v < PAVED_CHANCE
+              ? FRAME_FLOOR_PAVED
+              : v < PAVED_CHANCE + SPECKLE_CHANCE
+                ? FRAME_FLOOR_SPECKLE
+                : FRAME_FLOOR;
+          this.addCell(x * t, y * t, t, floorFrame);
+
           // Shadow the floor just south of a wall, so walls feel like they have height.
           if (isWall(x, y - 1)) {
             const shadow = this.add
@@ -710,6 +789,13 @@ export class GameScene extends Phaser.Scene {
         }
         this.addCell(x * t, y * t, t, frame);
       }
+    }
+
+    // Solid props (server-placed, collidable). Drawn last so they sit on top of
+    // the floor; they share the floor's depth (mapLayer) so heroes pass in front
+    // — but the server blocks the tile, so heroes never actually overlap them.
+    for (const p of data.props) {
+      this.addCell(p.x * t, p.y * t, t, p.frame);
     }
   }
 

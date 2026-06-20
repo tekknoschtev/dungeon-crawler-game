@@ -1,5 +1,5 @@
 import { Room, Client, matchMaker } from "colyseus";
-import { DungeonState, Player, Mob, Loot } from "./schema/DungeonState";
+import { DungeonState, Player, Mob, Loot, DeathMarker } from "./schema/DungeonState";
 import { loadMap, LoadedMap, TILE } from "./map";
 import {
   PLAYER_SPEED,
@@ -18,6 +18,7 @@ import {
   MOB_RESPAWN_INTERVAL,
   PICKUP_RANGE,
   HEAL_PCT,
+  MAX_DEATH_MARKERS,
 } from "./tuning";
 import {
   dist,
@@ -93,6 +94,10 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   maxClients = 4;
 
   private map!: LoadedMap;
+  // Collision grid = map.grid plus prop tiles marked solid. Kept separate from
+  // map.grid (which the client renders as walls) so props collide without
+  // drawing as bricks — the client draws the prop sprite over open floor.
+  private collision!: number[][];
   private inputs = new Map<string, InputState>();
   private combat = new Map<string, Combat>();
   private mobAI = new Map<string, MobAI>();
@@ -100,6 +105,8 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   private colorIndex = 0;
   private mobSeq = 0;
   private lootSeq = 0;
+  private markerSeq = 0;
+  private markerIds: string[] = []; // death-marker ids in insertion order (for culling)
   private now = 0; // accumulated simulation time in seconds
   private nextMobSpawnAt = 0;
 
@@ -119,10 +126,14 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.state.seed = (Math.random() * 0x100000000) >>> 0;
     this.map = loadMap(this.state.seed);
 
-    // Cache every floor tile once, for random mob/loot placement.
+    // Bake props into a collision-only grid (walls + prop tiles solid).
+    this.collision = this.map.grid.map((row) => row.slice());
+    for (const p of this.map.props) this.collision[p.y][p.x] = 1;
+
+    // Cache every walkable tile once (floor minus props), for mob/loot spawns.
     for (let y = 0; y < this.map.height; y++) {
       for (let x = 0; x < this.map.width; x++) {
-        if (this.map.grid[y][x] === 0) this.floors.push({ x, y });
+        if (this.collision[y][x] === 0) this.floors.push({ x, y });
       }
     }
 
@@ -153,6 +164,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
         width: this.map.width,
         height: this.map.height,
         grid: this.map.grid,
+        props: this.map.props,
       });
     });
 
@@ -305,6 +317,22 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.state.loot.set(`l${this.lootSeq++}`, loot);
   }
 
+  // --- Death markers -----------------------------------------------------
+
+  /** Drop a tombstone where a hero fell, culling the oldest past the cap. */
+  private placeDeathMarker(x: number, y: number, color: string) {
+    const marker = new DeathMarker();
+    marker.x = x;
+    marker.y = y;
+    marker.color = color;
+    const id = `d${this.markerSeq++}`;
+    this.state.markers.set(id, marker);
+    this.markerIds.push(id);
+    while (this.markerIds.length > MAX_DEATH_MARKERS) {
+      this.state.markers.delete(this.markerIds.shift()!);
+    }
+  }
+
   // --- Simulation --------------------------------------------------------
 
   private update(deltaMs: number) {
@@ -317,8 +345,13 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
 
       // Dead: count down to respawn; no movement or pickups meanwhile.
       if (player.hp <= 0) {
-        if (c.respawnAt === 0) c.respawnAt = this.now + RESPAWN_DELAY;
-        else if (this.now >= c.respawnAt) this.respawn(player, c);
+        if (c.respawnAt === 0) {
+          // First tick dead → leave a tombstone where they fell.
+          c.respawnAt = this.now + RESPAWN_DELAY;
+          this.placeDeathMarker(player.x, player.y, player.color);
+        } else if (this.now >= c.respawnAt) {
+          this.respawn(player, c);
+        }
         return;
       }
 
@@ -388,8 +421,8 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     c.respawnAt = 0;
   }
 
-  /** True if a box of half-size r centered at (x, y) overlaps any wall tile. */
+  /** True if a box of half-size r centered at (x, y) overlaps a wall or prop tile. */
   private collides(x: number, y: number, r: number): boolean {
-    return tileCollides(this.map.grid, this.map.width, this.map.height, TILE, x, y, r);
+    return tileCollides(this.collision, this.map.width, this.map.height, TILE, x, y, r);
   }
 }
