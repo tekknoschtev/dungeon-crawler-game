@@ -108,6 +108,8 @@ export interface LoadedMap {
   spawns: { x: number; y: number }[];
   /** solid decorative props (collidable furniture) on floor tiles */
   props: Prop[];
+  /** the descent point in TILE coords; standing on it lets the party go deeper */
+  exit: { x: number; y: number };
 }
 
 // Prop placement. Props go only on room-edge tiles (exactly one orthogonal wall
@@ -259,5 +261,18 @@ export function loadMap(seed: number): LoadedMap {
   const start = rooms.length > 0 ? roomCenter(rooms[0]) : { x: 1, y: 1 };
   const props = placeProps(grid, start);
 
-  return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props };
+  // Exit = the room center farthest from the start room, so descending means
+  // actually crossing the floor rather than standing on the stairs you spawned at.
+  let exit = start;
+  let bestD = -1;
+  for (const r of rooms) {
+    const c = roomCenter(r);
+    const d = (c.x - start.x) ** 2 + (c.y - start.y) ** 2;
+    if (d > bestD) {
+      bestD = d;
+      exit = c;
+    }
+  }
+
+  return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props, exit };
 }

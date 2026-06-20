@@ -31,8 +31,39 @@ export const MOB_DAMAGE = 8;
 export const MOB_ATTACK_COOLDOWN = 1.0; // s
 export const MOB_AGGRO_RANGE = 96; // px (~6 tiles)
 export const MOB_ATTACK_RANGE = 18; // px
-export const MOB_TARGET_COUNT = 12; // population the room tops up to
-export const MOB_RESPAWN_INTERVAL = 4; // s between top-up spawns
+
+// --- Pressure (the per-floor difficulty clock) -------------------------
+// Mob pressure ramps with TIME ON THE FLOOR, not by clearing it — a fresh floor
+// starts calm and climbs to a sweat over PRESSURE_RAMP_TIME, then holds. The ramp
+// (and the spawn timer) reset every time the party descends, so each new floor is
+// a breather that builds again (see DungeonRoom.enterFloor). `heat` (0..1) is this
+// ramp surfaced to the HUD. Tuned for a ~2–3 min floor: staying floods you with
+// targets, which is the pull to linger against the push to descend.
+export const PRESSURE_RAMP_TIME = 150; // s for heat to climb 0 → 1
+export const PRESSURE_BASE_TARGET = 6; // live mob population on a fresh, calm floor (heat 0)
+export const PRESSURE_MAX_TARGET = 22; // population the ramp tops out at (heat 1)
+export const PRESSURE_SPAWN_INTERVAL_CALM = 5.0; // s between top-up spawns at heat 0
+export const PRESSURE_SPAWN_INTERVAL_HOT = 1.2; // s between top-up spawns at heat 1
+export const PRESSURE_TARGET_HARD_CAP = 30; // absolute population ceiling (depth bonus included)
+
+// --- Depth scaling -----------------------------------------------------
+// Each floor deeper raises the stakes: tougher mobs and a higher starting
+// pressure baseline, so "go deeper" means "scarier." depth is 1-based — floor 1
+// gets no bonus, floor N gets (N-1)× each scaler.
+export const DEPTH_PRESSURE_BONUS = 1.5; // extra target population per floor below 1
+export const DEPTH_HP_SCALE = 0.15; // +15% mob max HP per floor below 1
+export const DEPTH_DAMAGE_SCALE = 0.1; // +10% mob damage per floor below 1
+
+// --- Descent -----------------------------------------------------------
+// Leaving is never forced (no "clear the floor"): a hero walks to the exit and
+// holds it briefly, then the whole party drops to the next floor (pressure
+// resets, depth +1). The short channel stops an accidental brush from dropping
+// everyone mid-fight.
+export const EXIT_RADIUS = 14; // px — how close a hero must be to count as "on" the exit
+export const DESCEND_CHANNEL_TIME = 1.5; // s a hero must hold the exit before the party descends
+// On descend the server signals clients (fade to black), waits this long so the
+// screen is black, then swaps floors — so the teleport happens unseen, not as a pop.
+export const DESCEND_FADE_MS = 300;
 
 // --- Loot --------------------------------------------------------------
 export const PICKUP_RANGE = 14; // px — auto-collect radius
