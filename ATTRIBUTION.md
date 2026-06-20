@@ -21,29 +21,20 @@ the local player is identified by their yellow name label rather than a drawn ri
   `client/public/assets/tiny-dungeon/tilemap_packed.png`. Frames in use:
   #48 (floor), plus the wall autotile set (#4/#5/#13/#15/#26/#30/#40/#57/#58/#59
   and inner corners #18/#25/#27), #96 (knight/hero, tinted per player),
-  #108 (slime mob), #115 (potion loot) and the weapon-drop set
-  #103/#104/#105/#106/#117/#118/#119 (shortsword/longsword/falchion/broadsword/
-  warhammer/battleaxe/handaxe — distinct attack drops, added 2026-06-19). Floor
+  #108 (slime mob), #115 (potion loot), #102 (shield — defense drop) and the
+  weapon-drop set #103/#104/#105/#106/#117/#118/#119 (shortsword/longsword/
+  falchion/broadsword/warhammer/battleaxe/handaxe — distinct attack drops, added
+  2026-06-19). Floor
   decoration (added
   2026-06-19): #49 (speckle floor) and #42 (paved-stone floor) as client-side
-  texture variation, plus solid collidable props #63/#75 (crate stacks), #73
-  (barrel), #74 (anvil), #82 (keg) placed server-side on room edges. Death
-  markers reuse #64 (gravestone), tinted to the fallen hero's color.
+  texture variation, plus #50/#51 (baked top-edge shadow floor, used below walls
+  in place of a flat shadow strip), plus solid collidable props #63/#75 (crate
+  stacks), #73 (barrel), #74 (anvil), #82 (keg) placed server-side on room edges.
+  Death markers use #64/#65 (two gravestone shapes, picked per marker), tinted to
+  the fallen hero's color.
 - Modifications: none (shipped the packed sheet as-is; raw pack extracted under
   the gitignored `assets-src/tiny-dungeon/`).
 - Date added: 2026-06-16 (floor decoration + death markers: 2026-06-19)
-
-### Original — steel shield icon (loot)
-- Source URL: n/a (created for this project)
-- Author / creator: this project (hand-drawn to match the Tiny Dungeon style)
-- License: CC0 1.0 (we release it to the public domain)
-- License URL: https://creativecommons.org/publicdomain/zero/1.0/
-- Used for: the "defense" loot drop icon (Tiny Dungeon has no shield tile). A
-  16×16 sprite at `client/public/assets/tiny-dungeon/shield.png`, drawn using
-  Tiny Dungeon's own palette (outline `#3f2631`, steel `#c0cbdc/#8b9bb4/#52607c`,
-  blue boss `#0099db`) so it reads as native pack art.
-- Modifications: original work.
-- Date added: 2026-06-18
 
 ## Planned sources (Milestone 2)
 

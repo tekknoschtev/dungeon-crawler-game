@@ -10,6 +10,12 @@ const TILE_SRC = 16; // source tile size in px (we scale up to the world TILE)
 const FRAME_FLOOR = 48; // plain stone floor (the common case)
 const FRAME_FLOOR_SPECKLE = 49; // subtle pebble/sand debris — same tan base as #48
 const FRAME_FLOOR_PAVED = 42; // stone-slab accent (rarer, breaks up large floors)
+// Floor tiles that sit directly below a wall use Kenney's own baked top-edge
+// shadow gradient (#50, speckled sibling #51) instead of a flat overlay strip —
+// the soft gradient grounds the wall more organically. (Corner tile #52 adds a
+// right-edge shadow too; unused until we also shade side edges.)
+const FRAME_FLOOR_SHADOW = 50; // top-edge shadow (wall to the north)
+const FRAME_FLOOR_SHADOW_SPECKLE = 51; // same shadow, with speckle for variety
 const FRAME_VOID = 0; // brown "rock/void" behind walls (deep interior)
 const FRAME_HERO = 96; // armored knight; tinted per player to tell heroes apart
 
@@ -53,11 +59,6 @@ const WALL_INNER_CORNER: Record<number, number> = {
   [DSE | DSW]: 18,
 };
 
-// A soft shadow strip grounds the floor directly south of a wall.
-const WALL_SHADOW_COLOR = 0x000000;
-const WALL_SHADOW_ALPHA = 0.32;
-const WALL_SHADOW_H = 5; // px (in source/world tile space)
-
 // --- Decorative floor variation ----------------------------------------
 // Purely client-side render: each floor tile's texture is chosen by a
 // deterministic hash of its (x, y), so every co-op client renders the identical
@@ -66,7 +67,10 @@ const WALL_SHADOW_H = 5; // px (in source/world tile space)
 const SPECKLE_CHANCE = 0.12; // floor tiles that get the subtle speckle variant
 const PAVED_CHANCE = 0.03; // rarer stone-slab accent tiles
 const DECOR_DEPTH = 3; // markers: above floor (mapLayer=0), below loot (5)
-const FRAME_TOMBSTONE = 64; // rounded gravestone — used as a per-hero death marker
+// Two gravestone shapes for death markers — a rounded headstone (#64) and a
+// rectangular slab (#65). Picked deterministically per marker so every client
+// renders the same stone for a given fallen hero.
+const FRAME_TOMBSTONES = [64, 65];
 
 /**
  * Deterministic [0, 1) hash of a tile coord plus a salt (so we can make several
@@ -108,11 +112,11 @@ const RARITY_COLORS: Record<string, number> = {
   epic: 0xc08bff,
   legendary: 0xffb028,
 };
-// Loot icons: heal/attack come from the Tiny Dungeon sheet (red potion / weapon);
-// defense uses our custom steel-shield sprite (Tiny Dungeon has no shield tile).
+// Loot icons all come from the Tiny Dungeon sheet (red potion / weapon / shield).
 const CATEGORY_FRAME: Record<string, number> = {
   heal: 115, // red potion
   attack: 103, // fallback weapon (shortsword) if a variant is unknown
+  defense: 102, // shield
 };
 // Attack drops are specific weapons — map the synced weapon name (see WEAPONS in
 // server tuning.ts) to its Tiny Dungeon sheet frame. Keep names in sync with the
@@ -126,8 +130,6 @@ const WEAPON_FRAMES: Record<string, number> = {
   battleaxe: 118,
   warhammer: 117,
 };
-const SHIELD_KEY = "shield"; // custom 16px shield (see ATTRIBUTION.md)
-
 const HEAL_COOLDOWN_MS = 250; // light throttle on the heal action
 
 /** Shapes decoded on the client (mirror the server schema). */
@@ -249,7 +251,6 @@ export class GameScene extends Phaser.Scene {
       frameWidth: TILE_SRC,
       frameHeight: TILE_SRC,
     });
-    this.load.image(SHIELD_KEY, "/assets/tiny-dungeon/shield.png");
   }
 
   create() {
@@ -495,7 +496,7 @@ export class GameScene extends Phaser.Scene {
     this.mobs.delete(id);
   }
 
-  /** Sheet frame for a (non-defense) drop: the weapon's icon for attack, else the potion. */
+  /** Sheet frame for a drop: the weapon's icon for attack, the shield for defense, else the potion. */
   private lootFrame(l: LootView): number {
     if (l.category === "attack") return WEAPON_FRAMES[l.variant] ?? CATEGORY_FRAME.attack;
     return CATEGORY_FRAME[l.category] ?? CATEGORY_FRAME.heal;
@@ -507,11 +508,8 @@ export class GameScene extends Phaser.Scene {
       .circle(l.x, l.y, 9, color, 0.5)
       .setBlendMode(Phaser.BlendModes.ADD)
       .setDepth(LOOT_GLOW_DEPTH);
-    const sprite = (
-      l.category === "defense"
-        ? this.add.image(l.x, l.y, SHIELD_KEY)
-        : this.add.image(l.x, l.y, TILES_KEY, this.lootFrame(l))
-    )
+    const sprite = this.add
+      .image(l.x, l.y, TILES_KEY, this.lootFrame(l))
       .setDisplaySize(TILE, TILE)
       .setDepth(LOOT_DEPTH);
     // Gentle pulse so drops read as "shiny", brighter the rarer they are.
@@ -550,8 +548,9 @@ export class GameScene extends Phaser.Scene {
    */
   private addMarker(m: MarkerView, id: string) {
     const colorNum = Phaser.Display.Color.HexStringToColor(m.color).color;
+    const frame = FRAME_TOMBSTONES[tileHash(m.x, m.y, 2) < 0.5 ? 0 : 1];
     const stone = this.add
-      .image(m.x, m.y, TILES_KEY, FRAME_TOMBSTONE)
+      .image(m.x, m.y, TILES_KEY, frame)
       .setDisplaySize(TILE, TILE)
       .setTint(colorNum)
       .setDepth(DECOR_DEPTH);
@@ -793,22 +792,25 @@ export class GameScene extends Phaser.Scene {
       for (let x = 0; x < data.width; x++) {
         if (!isWall(x, y)) {
           // Floor — deterministic texture variation so large floors don't read flat.
-          const v = tileHash(x, y, 0);
-          const floorFrame =
-            v < PAVED_CHANCE
-              ? FRAME_FLOOR_PAVED
-              : v < PAVED_CHANCE + SPECKLE_CHANCE
-                ? FRAME_FLOOR_SPECKLE
-                : FRAME_FLOOR;
-          this.addCell(x * t, y * t, t, floorFrame);
-
-          // Shadow the floor just south of a wall, so walls feel like they have height.
+          // A tile directly below a wall uses the baked top-edge shadow tile so the
+          // wall reads as having height; the gradient replaces the old flat strip.
+          let floorFrame: number;
           if (isWall(x, y - 1)) {
-            const shadow = this.add
-              .rectangle(x * t, y * t, t, WALL_SHADOW_H, WALL_SHADOW_COLOR, WALL_SHADOW_ALPHA)
-              .setOrigin(0);
-            this.mapLayer.add(shadow);
+            floorFrame =
+              tileHash(x, y, 1) < SPECKLE_CHANCE ? FRAME_FLOOR_SHADOW_SPECKLE : FRAME_FLOOR_SHADOW;
+          } else {
+            const v = tileHash(x, y, 0);
+            floorFrame =
+              v < PAVED_CHANCE
+                ? FRAME_FLOOR_PAVED
+                : v < PAVED_CHANCE + SPECKLE_CHANCE
+                  ? FRAME_FLOOR_SPECKLE
+                  : FRAME_FLOOR;
           }
+          const cell = this.addCell(x * t, y * t, t, floorFrame);
+          // The speckle tile is non-directional debris, so mirror/rotate it for
+          // extra variety — turns one frame into 8 orientations with no seams.
+          if (floorFrame === FRAME_FLOOR_SPECKLE) this.orientDecor(cell, x, y, t);
           continue;
         }
 
@@ -852,6 +854,20 @@ export class GameScene extends Phaser.Scene {
       .setDisplaySize(t, t);
     this.mapLayer.add(cell);
     return cell;
+  }
+
+  /**
+   * Give a non-directional decor tile (the speckle floor) a random orientation,
+   * stable per (x, y) so every client matches. A square tile rotates cleanly
+   * about its centre; combined with a flip that's 8 distinct looks from one frame.
+   */
+  private orientDecor(cell: Phaser.GameObjects.Image, gx: number, gy: number, t: number) {
+    const turns = Math.floor(tileHash(gx, gy, 3) * 4); // 0..3 quarter-turns
+    cell
+      .setOrigin(0.5)
+      .setPosition(gx * t + t / 2, gy * t + t / 2)
+      .setAngle(turns * 90);
+    if (tileHash(gx, gy, 4) < 0.5) cell.setFlipX(true);
   }
 
   update(time: number, delta: number) {
