@@ -314,6 +314,15 @@
         background: currentColor;
         border-radius: 1px;
       }
+      /* Weapon-buff icon: one 16px frame cropped from the Tiny Dungeon sheet
+         (12 columns). background-position is set per weapon in updateHud. */
+      .chip .wpn {
+        width: 20px;
+        height: 20px;
+        background-image: url(/assets/tiny-dungeon/tilemap_packed.png);
+        background-size: 240px auto;
+        image-rendering: pixelated;
+      }
       .chip b {
         position: absolute;
         top: -5px;
@@ -436,8 +445,8 @@
       </div>
       <div class="hud-row">
         <span id="hud-heal" class="chip empty" title="no heals">❤<b id="hud-heal-n">0</b></span>
-        <span id="hud-atk" class="chip atk" hidden>🗡<i></i></span>
-        <span id="hud-def" class="chip def" hidden>🛡<i></i></span>
+        <span id="hud-atk" class="chip atk" hidden><span class="wpn" id="hud-atk-icon"></span><i></i><b></b></span>
+        <span id="hud-def" class="chip def" hidden>🛡<i></i><b></b></span>
       </div>
     </div>
 

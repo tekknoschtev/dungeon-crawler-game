@@ -48,20 +48,20 @@ export const MAX_DEATH_MARKERS = 24;
 export interface Rarity {
   name: string;
   weight: number;
-  attackMult: number;
   defenseReduce: number;
 }
 
-// Loot rarity: drop weight + how strongly it scales the attack/defense buffs.
-// (Heals are a flat % and stack, so rarity no longer affects them.)
-// Potency bumped alongside the rarer drop rates (see CATEGORIES) so the buffs
-// you do find feel worth the wait.
+// Loot rarity: drop weight + how strongly it scales the defense buff. (Attack
+// drops are weapons now — their power lives in WEAPONS, not here; heals are a
+// flat % and stack, so rarity doesn't touch them either.) Rarity still tags the
+// floor-glow color on the client. Potency is bumped alongside the rarer drop
+// rates (see CATEGORIES) so the buffs you do find feel worth the wait.
 export const RARITIES: Rarity[] = [
-  { name: "common", weight: 60, attackMult: 1.6, defenseReduce: 0.25 },
-  { name: "uncommon", weight: 25, attackMult: 1.9, defenseReduce: 0.4 },
-  { name: "rare", weight: 10, attackMult: 2.2, defenseReduce: 0.55 },
-  { name: "epic", weight: 4, attackMult: 2.5, defenseReduce: 0.65 },
-  { name: "legendary", weight: 1, attackMult: 2.8, defenseReduce: 0.75 },
+  { name: "common", weight: 60, defenseReduce: 0.25 },
+  { name: "uncommon", weight: 25, defenseReduce: 0.4 },
+  { name: "rare", weight: 10, defenseReduce: 0.55 },
+  { name: "epic", weight: 4, defenseReduce: 0.65 },
+  { name: "legendary", weight: 1, defenseReduce: 0.75 },
 ];
 export const RARITY_TOTAL = RARITIES.reduce((sum, r) => sum + r.weight, 0);
 export const rarityByName = (name: string): Rarity =>
@@ -77,3 +77,40 @@ export const CATEGORIES = [
   { name: "heal", weight: 60 },
 ];
 export const CATEGORY_TOTAL = CATEGORIES.reduce((sum, c) => sum + c.weight, 0);
+
+// --- Weapons -----------------------------------------------------------
+// An "attack" drop is now one of several distinct weapons, not a generic buff
+// scaled only by rarity. Each weapon equips for `duration` seconds and gives its
+// own damage `attackMult`; the heavy ones also `knockback` mobs you hit (px the
+// mob is shoved back). The bigger the impact, the rarer the drop — so `weight`
+// falls as the effect grows. `rarity` only tags the floor-glow color (mirrors
+// RARITY_COLORS on the client); the gameplay numbers live entirely here.
+//
+// `frame` is the Tiny Dungeon sheet index the *client* renders for this weapon's
+// drop — kept here so the canonical table is in one place, but the client mirrors
+// it (WEAPON_FRAMES in GameScene.ts) since the server never renders. Keep the
+// names in sync with that mirror.
+export interface Weapon {
+  name: string;
+  frame: number; // Tiny Dungeon sheet index (client render hint)
+  rarity: string; // floor-glow tier only (see RARITY_COLORS)
+  weight: number; // drop weight: rarer = bigger effect
+  attackMult: number; // damage multiplier while equipped
+  duration: number; // s the weapon stays equipped
+  knockback: number; // px a hit mob is shoved back (0 = none)
+}
+
+// Keep "shortsword" first and "warhammer" last: logic.test.ts pins rollWeapon's
+// bottom/top buckets to that order.
+export const WEAPONS: Weapon[] = [
+  { name: "shortsword", frame: 103, rarity: "common", weight: 40, attackMult: 1.6, duration: 9, knockback: 0 },
+  { name: "longsword", frame: 104, rarity: "uncommon", weight: 24, attackMult: 1.8, duration: 15, knockback: 0 },
+  { name: "handaxe", frame: 119, rarity: "uncommon", weight: 14, attackMult: 2.1, duration: 9, knockback: 0 },
+  { name: "falchion", frame: 105, rarity: "rare", weight: 9, attackMult: 2.4, duration: 11, knockback: 0 },
+  { name: "broadsword", frame: 106, rarity: "rare", weight: 7, attackMult: 2.2, duration: 10, knockback: 28 },
+  { name: "battleaxe", frame: 118, rarity: "epic", weight: 4, attackMult: 2.6, duration: 12, knockback: 40 },
+  { name: "warhammer", frame: 117, rarity: "legendary", weight: 2, attackMult: 2.9, duration: 16, knockback: 56 },
+];
+export const WEAPON_TOTAL = WEAPONS.reduce((sum, w) => sum + w.weight, 0);
+export const weaponByName = (name: string): Weapon =>
+  WEAPONS.find((w) => w.name === name) ?? WEAPONS[0];

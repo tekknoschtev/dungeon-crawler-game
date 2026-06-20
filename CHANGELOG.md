@@ -9,6 +9,17 @@ change rather than by package.
 ## [Unreleased]
 
 ### Added
+- **Weapon variety** — attack drops are now one of seven distinct weapons
+  (shortsword, longsword, handaxe, falchion, broadsword, battleaxe, warhammer)
+  instead of a single sword, each with its own sprite and stats. Bigger effects
+  are rarer: heavier weapons hit harder and last longer, and the broadsword,
+  battleaxe, and warhammer **knock mobs back** on hit. Weapon definitions live in
+  `WEAPONS` (`server/src/rooms/tuning.ts`); the drop syncs a `Loot.variant` the
+  client renders.
+- The attack-buff HUD chip now shows the **actual equipped weapon's icon** (cropped
+  from the sprite sheet) with a numeric seconds countdown, instead of a generic
+  sword. The depleting bar measures against each weapon's own duration, so longer
+  weapons drain accurately (previously a fixed 6s bar). Synced via `Player.weapon`.
 - Hero **body** selection in the lobby — pick one of 10 Tiny Dungeon character
   sprites (#84–88, #96–100) alongside the existing color picker, for lots of
   hero variation. Synced as `Player.sprite`, validated server-side against an

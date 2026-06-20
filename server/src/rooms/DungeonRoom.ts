@@ -26,7 +26,9 @@ import {
   collides as tileCollides,
   rollRarity,
   rollCategory,
+  rollWeapon,
   applyLootEffect,
+  applyKnockback,
   playerAttackDamage,
   mobDamageAfterDefense,
   regenHp,
@@ -76,6 +78,7 @@ interface Combat {
   respawnAt: number;
   attackMult: number; // active attack-buff damage multiplier (1 = none)
   defenseReduce: number; // active defense-buff damage reduction 0..1 (0 = none)
+  knockback: number; // px a hit mob is shoved by the equipped weapon (0 = none)
 }
 
 /** Per-mob AI state (server-only; not synced). */
@@ -209,7 +212,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
 
     this.state.players.set(client.sessionId, player);
     this.inputs.set(client.sessionId, { up: false, down: false, left: false, right: false });
-    this.combat.set(client.sessionId, { attackReadyAt: 0, respawnAt: 0, attackMult: 1, defenseReduce: 0 });
+    this.combat.set(client.sessionId, { attackReadyAt: 0, respawnAt: 0, attackMult: 1, defenseReduce: 0, knockback: 0 });
 
     // The map is sent when the client signals "ready" (see onCreate), not here.
     console.log(`${player.name} joined (${client.sessionId}). Players: ${this.clients.length}`);
@@ -232,10 +235,20 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     c.attackReadyAt = this.now + PLAYER_ATTACK_COOLDOWN;
 
     const damage = playerAttackDamage(player.attackBuff > 0, c.attackMult);
+    const knockback = player.attackBuff > 0 ? c.knockback : 0;
     this.state.mobs.forEach((mob, id) => {
       if (dist(mob.x, mob.y, player.x, player.y) <= PLAYER_ATTACK_RANGE + MOB_RADIUS) {
         mob.hp -= damage;
-        if (mob.hp <= 0) this.killMob(id, mob);
+        if (mob.hp <= 0) {
+          this.killMob(id, mob);
+        } else if (knockback > 0) {
+          const k = applyKnockback(
+            this.collision, this.map.width, this.map.height, TILE,
+            player.x, player.y, mob.x, mob.y, knockback, MOB_RADIUS
+          );
+          mob.x = k.x;
+          mob.y = k.y;
+        }
       }
     });
   }
@@ -325,8 +338,15 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     const loot = new Loot();
     loot.x = x;
     loot.y = y;
-    loot.rarity = rollRarity().name;
     loot.category = rollCategory();
+    if (loot.category === "attack") {
+      // Attack drops are a specific weapon; its own rarity tags the floor glow.
+      const weapon = rollWeapon();
+      loot.variant = weapon.name;
+      loot.rarity = weapon.rarity;
+    } else {
+      loot.rarity = rollRarity().name;
+    }
     this.state.loot.set(`l${this.lootSeq++}`, loot);
   }
 
@@ -374,7 +394,11 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       // Tick down active buffs; clear their potency once they lapse.
       if (player.attackBuff > 0) {
         player.attackBuff = Math.max(0, player.attackBuff - dt);
-        if (player.attackBuff === 0) c.attackMult = 1;
+        if (player.attackBuff === 0) {
+          c.attackMult = 1;
+          c.knockback = 0;
+          player.weapon = "";
+        }
       }
       if (player.defenseBuff > 0) {
         player.defenseBuff = Math.max(0, player.defenseBuff - dt);
@@ -429,8 +453,10 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     // Buffs lapse on death; the carried heal potion is kept.
     player.attackBuff = 0;
     player.defenseBuff = 0;
+    player.weapon = "";
     c.attackMult = 1;
     c.defenseReduce = 0;
+    c.knockback = 0;
     c.respawnAt = 0;
   }
 
