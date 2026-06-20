@@ -3,23 +3,24 @@ import { Client, Room } from "@colyseus/sdk";
 import { GameScene } from "./scenes/GameScene";
 import { UIScene } from "./scenes/UIScene";
 import { SERVER_URL, ROOM_NAME, VIEW_W, VIEW_H } from "./config";
+// Hero appearance options come straight from the server's canonical lists
+// (server/src/rooms/heroAppearance.ts) so the lobby can't drift from what the
+// server validates. SELECTABLE_COLORS already includes the "no color" entry.
+import {
+  SELECTABLE_COLORS as HERO_COLORS,
+  NO_COLOR,
+  HERO_SPRITES,
+} from "../../server/src/rooms/heroAppearance";
 
 // Friendly join code shape — must match the server (DungeonRoom CODE_ALPHABET).
 const CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}$/;
 
-// Hero color palette — mirrors the server's COLORS (DungeonRoom). The server
-// validates the pick against its own allowlist and falls back to round-robin for
-// anything it doesn't recognise, so keep these two lists in sync.
-const HERO_COLORS = ["#ff5d73", "#4ec9ff", "#ffd65c", "#7cf36b", "#c08bff", "#ff9f45"];
+// "#ffffff" (NO_COLOR) is the "no color" option: white is Phaser's no-op tint,
+// so the hero renders in its natural palette.
 // Start on a random color so a room full of defaults isn't all one color.
 let colorIndex = Math.floor(Math.random() * HERO_COLORS.length);
 let selectedColor = HERO_COLORS[colorIndex];
 
-// Selectable hero bodies — Tiny Dungeon sheet frames (humanoid characters at
-// #84–88 and #96–100). Mirrors the server's HERO_SPRITES (DungeonRoom); the
-// server validates the pick against its own allowlist and falls back to the
-// default knight (#96) for anything it doesn't recognise, so keep these in sync.
-const HERO_SPRITES = [84, 85, 86, 87, 88, 96, 97, 98, 99, 100];
 // Start on a random body too, for variety in a fresh room.
 let spriteIndex = Math.floor(Math.random() * HERO_SPRITES.length);
 let selectedSprite = HERO_SPRITES[spriteIndex];
@@ -123,7 +124,16 @@ function setupHeroPicker() {
   const sheet = new Image();
 
   const render = () => {
-    swatch.style.background = selectedColor;
+    if (selectedColor === NO_COLOR) {
+      // "No color" — a neutral swatch with a diagonal slash so it reads as
+      // "none" rather than a plain white tint.
+      swatch.style.background =
+        "linear-gradient(135deg, #2a2d36 0 45%, #ff5d73 45% 55%, #2a2d36 55% 100%)";
+      swatch.title = "No color (natural)";
+    } else {
+      swatch.style.background = selectedColor;
+      swatch.title = "";
+    }
     const d = canvas.width; // square; scaled-up hero fills the canvas
     ctx.clearRect(0, 0, d, d);
     if (!sheet.complete || sheet.naturalWidth === 0) return;
