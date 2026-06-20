@@ -21,7 +21,10 @@ the local player is identified by their yellow name label rather than a drawn ri
   `client/public/assets/tiny-dungeon/tilemap_packed.png`. Frames in use:
   #48 (floor), plus the wall autotile set (#4/#5/#13/#15/#26/#30/#40/#57/#58/#59
   and inner corners #18/#25/#27), #96 (knight/hero, tinted per player),
-  #108 (slime mob), #103/#115 (sword/potion loot). Floor decoration (added
+  #108 (slime mob), #115 (potion loot) and the weapon-drop set
+  #103/#104/#105/#106/#117/#118/#119 (shortsword/longsword/falchion/broadsword/
+  warhammer/battleaxe/handaxe — distinct attack drops, added 2026-06-19). Floor
+  decoration (added
   2026-06-19): #49 (speckle floor) and #42 (paved-stone floor) as client-side
   texture variation, plus solid collidable props #63/#75 (crate stacks), #73
   (barrel), #74 (anvil), #82 (keg) placed server-side on room edges. Death

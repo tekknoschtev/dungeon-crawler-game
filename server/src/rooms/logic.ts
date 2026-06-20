@@ -17,8 +17,12 @@ import {
   RARITY_TOTAL,
   CATEGORIES,
   CATEGORY_TOTAL,
+  WEAPONS,
+  WEAPON_TOTAL,
   rarityByName,
+  weaponByName,
   type Rarity,
+  type Weapon,
 } from "./tuning";
 
 /** A function returning a float in [0, 1). Math.random by default; injectable in tests. */
@@ -86,6 +90,11 @@ export function rollCategory(rng: Rng = Math.random): string {
   return rollWeighted(CATEGORIES, CATEGORY_TOTAL, rng).name;
 }
 
+/** Which weapon an "attack" drop is — rarer weapons hit harder/knock back. */
+export function rollWeapon(rng: Rng = Math.random): Weapon {
+  return rollWeighted(WEAPONS, WEAPON_TOTAL, rng);
+}
+
 // --- Loot application --------------------------------------------------
 
 /** The slice of a Player that loot mutates (Player satisfies this structurally). */
@@ -93,32 +102,44 @@ export interface LootTarget {
   attackBuff: number;
   defenseBuff: number;
   healCharges: number;
+  weapon: string; // name of the equipped weapon backing the attack buff (HUD icon)
 }
 
 /** The slice of per-player Combat state loot scales (never synced to clients). */
 export interface LootBuffs {
   attackMult: number;
   defenseReduce: number;
+  knockback: number; // px a hit mob is shoved while the weapon buff is active
 }
 
 export interface LootDrop {
   rarity: string;
   category: string; // "heal" | "attack" | "defense"
+  variant?: string; // weapon name for an "attack" drop (see WEAPONS); empty otherwise
 }
 
 /**
- * Apply a walked-over drop: instant buff (attack/defense) or a banked heal.
- * Mutates `target`/`buffs` in place. Returns false if the drop should be LEFT on
- * the floor — a heal when the stack is already full — so it stays available for
- * later or for a teammate.
+ * Apply a walked-over drop: equip a weapon (attack), instant defense buff, or a
+ * banked heal. Mutates `target`/`buffs` in place. Returns false if the drop
+ * should be LEFT on the floor — a heal when the stack is already full — so it
+ * stays available for later or for a teammate.
+ *
+ * Weapon perks (power, duration, knockback) only ever ratchet up: grabbing a
+ * lesser weapon never downgrades a stronger one you're already wielding, and
+ * never shortens your remaining buff time.
  */
 export function applyLootEffect(target: LootTarget, buffs: LootBuffs, loot: LootDrop): boolean {
-  const r = rarityByName(loot.rarity);
   if (loot.category === "attack") {
-    target.attackBuff = BUFF_DURATION; // refresh
-    buffs.attackMult = Math.max(buffs.attackMult, r.attackMult); // never downgrade an active buff
+    const w = weaponByName(loot.variant ?? "");
+    // The displayed weapon is whichever one owns the active (strongest) power, so
+    // grabbing a lesser weapon refreshes the timer without changing the icon.
+    if (w.attackMult >= buffs.attackMult) target.weapon = w.name;
+    target.attackBuff = Math.max(target.attackBuff, w.duration);
+    buffs.attackMult = Math.max(buffs.attackMult, w.attackMult);
+    buffs.knockback = Math.max(buffs.knockback, w.knockback);
     return true;
   }
+  const r = rarityByName(loot.rarity);
   if (loot.category === "defense") {
     target.defenseBuff = BUFF_DURATION;
     buffs.defenseReduce = Math.max(buffs.defenseReduce, r.defenseReduce);
@@ -140,6 +161,42 @@ export function playerAttackDamage(attackBuffActive: boolean, attackMult: number
 /** Damage a mob hit deals to a player after an active defense buff soaks some. */
 export function mobDamageAfterDefense(defenseBuffActive: boolean, defenseReduce: number): number {
   return MOB_DAMAGE * (1 - (defenseBuffActive ? defenseReduce : 0));
+}
+
+/**
+ * Where a mob ends up after being knocked `distance` px directly away from the
+ * attacker at (px, py). Walks there in small steps with the same axis-separated
+ * wall check the simulation uses, so a heavy shove slides along walls and can't
+ * tunnel through one. Returns the mob's current spot unchanged when the attacker
+ * is exactly on top of it (no push direction).
+ */
+export function applyKnockback(
+  grid: number[][],
+  width: number,
+  height: number,
+  tileSize: number,
+  px: number,
+  py: number,
+  mx: number,
+  my: number,
+  distance: number,
+  radius: number
+): { x: number; y: number } {
+  const dir = normalize(mx - px, my - py);
+  if (dir.x === 0 && dir.y === 0) return { x: mx, y: my };
+  const step = Math.max(1, radius); // px per sub-step keeps each hop < a tile
+  let x = mx;
+  let y = my;
+  let remaining = distance;
+  while (remaining > 0) {
+    const s = Math.min(step, remaining);
+    const nx = x + dir.x * s;
+    const ny = y + dir.y * s;
+    if (!collides(grid, width, height, tileSize, nx, y, radius)) x = nx;
+    if (!collides(grid, width, height, tileSize, x, ny, radius)) y = ny;
+    remaining -= s;
+  }
+  return { x, y };
 }
 
 // --- Cosmetics ---------------------------------------------------------

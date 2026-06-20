@@ -108,15 +108,26 @@ const RARITY_COLORS: Record<string, number> = {
   epic: 0xc08bff,
   legendary: 0xffb028,
 };
-// Loot icons: heal/attack come from the Tiny Dungeon sheet (red potion / sword);
+// Loot icons: heal/attack come from the Tiny Dungeon sheet (red potion / weapon);
 // defense uses our custom steel-shield sprite (Tiny Dungeon has no shield tile).
 const CATEGORY_FRAME: Record<string, number> = {
   heal: 115, // red potion
-  attack: 103, // sword
+  attack: 103, // fallback weapon (shortsword) if a variant is unknown
+};
+// Attack drops are specific weapons — map the synced weapon name (see WEAPONS in
+// server tuning.ts) to its Tiny Dungeon sheet frame. Keep names in sync with the
+// server table; heavier weapons (broadsword/battleaxe/warhammer) knock mobs back.
+const WEAPON_FRAMES: Record<string, number> = {
+  shortsword: 103,
+  longsword: 104,
+  handaxe: 119,
+  falchion: 105,
+  broadsword: 106,
+  battleaxe: 118,
+  warhammer: 117,
 };
 const SHIELD_KEY = "shield"; // custom 16px shield (see ATTRIBUTION.md)
 
-const BUFF_SECONDS = 6; // mirrors server BUFF_DURATION (for HUD countdown bars)
 const HEAL_COOLDOWN_MS = 250; // light throttle on the heal action
 
 /** Shapes decoded on the client (mirror the server schema). */
@@ -131,6 +142,7 @@ interface PlayerView {
   healCharges: number; // stacked heal potions on hand
   attackBuff: number; // seconds remaining (> 0 = active)
   defenseBuff: number;
+  weapon: string; // equipped weapon name backing the attack buff (HUD icon); "" when none
 }
 
 interface MobView {
@@ -147,6 +159,7 @@ interface LootView {
   y: number;
   rarity: string;
   category: string; // "heal" | "attack" | "defense"
+  variant: string; // weapon name for an "attack" drop (see WEAPON_FRAMES); empty otherwise
 }
 
 interface MarkerView {
@@ -482,6 +495,12 @@ export class GameScene extends Phaser.Scene {
     this.mobs.delete(id);
   }
 
+  /** Sheet frame for a (non-defense) drop: the weapon's icon for attack, else the potion. */
+  private lootFrame(l: LootView): number {
+    if (l.category === "attack") return WEAPON_FRAMES[l.variant] ?? CATEGORY_FRAME.attack;
+    return CATEGORY_FRAME[l.category] ?? CATEGORY_FRAME.heal;
+  }
+
   private addLoot(l: LootView, id: string) {
     const color = RARITY_COLORS[l.rarity] ?? RARITY_COLORS.common;
     const glow = this.add
@@ -491,7 +510,7 @@ export class GameScene extends Phaser.Scene {
     const sprite = (
       l.category === "defense"
         ? this.add.image(l.x, l.y, SHIELD_KEY)
-        : this.add.image(l.x, l.y, TILES_KEY, CATEGORY_FRAME[l.category] ?? CATEGORY_FRAME.heal)
+        : this.add.image(l.x, l.y, TILES_KEY, this.lootFrame(l))
     )
       .setDisplaySize(TILE, TILE)
       .setDepth(LOOT_DEPTH);
@@ -668,19 +687,44 @@ export class GameScene extends Phaser.Scene {
     if (heal) heal.title = p.healCharges > 0 ? `${p.healCharges} heal(s) — press Q` : "no heals";
     if (healN) healN.textContent = String(p.healCharges);
 
-    this.setBuffChip("hud-atk", p.attackBuff);
+    this.setBuffChip("hud-atk", p.attackBuff, p.weapon);
     this.setBuffChip("hud-def", p.defenseBuff);
   }
 
-  private setBuffChip(id: string, secs: number) {
+  /**
+   * Show/hide a buff chip and refresh its countdown. `weapon` (attack chip only)
+   * swaps in the equipped weapon's sheet icon. The depleting bar measures against
+   * the buff's *own* full length — remembered as the peak seconds seen this span
+   * (data-full) — so weapons of any duration drain accurately without the client
+   * having to mirror each one's length.
+   */
+  private setBuffChip(id: string, secs: number, weapon?: string) {
     const el = document.getElementById(id);
     if (!el) return;
-    if (secs > 0) {
-      el.hidden = false;
-      const bar = el.querySelector("i") as HTMLElement | null;
-      if (bar) bar.style.width = `${Math.max(0, Math.min(100, (secs / BUFF_SECONDS) * 100))}%`;
-    } else {
+    if (secs <= 0) {
       el.hidden = true;
+      delete el.dataset.full; // reset peak so the next buff measures itself afresh
+      return;
+    }
+    el.hidden = false;
+
+    let full = Number(el.dataset.full ?? 0);
+    if (secs > full) {
+      full = secs;
+      el.dataset.full = String(full);
+    }
+    const bar = el.querySelector("i") as HTMLElement | null;
+    if (bar) bar.style.width = `${Math.max(0, Math.min(100, (secs / full) * 100))}%`;
+    const label = el.querySelector("b") as HTMLElement | null;
+    if (label) label.textContent = `${Math.ceil(secs)}`;
+
+    if (weapon !== undefined) {
+      const icon = el.querySelector(".wpn") as HTMLElement | null;
+      if (icon) {
+        const frame = WEAPON_FRAMES[weapon] ?? CATEGORY_FRAME.attack;
+        icon.style.backgroundPosition = `-${(frame % 12) * 20}px -${Math.floor(frame / 12) * 20}px`;
+        el.title = weapon ? `${weapon} — ${Math.ceil(secs)}s` : "";
+      }
     }
   }
 

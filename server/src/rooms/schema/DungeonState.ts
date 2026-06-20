@@ -23,6 +23,9 @@ export class Player extends Schema {
   @type("number") healCharges: number = 0;
   @type("number") attackBuff: number = 0;
   @type("number") defenseBuff: number = 0;
+  // Name of the weapon backing the active attack buff (see WEAPONS in tuning.ts),
+  // so the HUD can show the actual weapon's icon. "" while unarmed.
+  @type("string") weapon: string = "";
 }
 
 /** A server-driven enemy. Position is simulated and synced every tick. */
@@ -42,8 +45,11 @@ export class Mob extends Schema {
 export class Loot extends Schema {
   @type("number") x: number = 0;
   @type("number") y: number = 0;
-  @type("string") rarity: string = "common"; // scales the effect's strength
+  @type("string") rarity: string = "common"; // scales the effect's strength (and the floor-glow color)
   @type("string") category: string = "heal"; // "heal" | "attack" | "defense"
+  // For an "attack" drop, which weapon it is (see WEAPONS in tuning.ts) — the
+  // client renders the matching sprite. Empty for heal/defense drops.
+  @type("string") variant: string = "";
 }
 
 /**

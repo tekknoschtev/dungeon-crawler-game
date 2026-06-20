@@ -5,7 +5,9 @@ import {
   collides,
   rollRarity,
   rollCategory,
+  rollWeapon,
   applyLootEffect,
+  applyKnockback,
   playerAttackDamage,
   mobDamageAfterDefense,
   regenHp,
@@ -21,13 +23,14 @@ import {
   BUFF_DURATION,
   MAX_HEAL_CHARGES,
   rarityByName,
+  weaponByName,
 } from "./tuning";
 
 /** A fresh, unbuffed loot target + combat buffs pair. */
 function freshTarget(): { t: LootTarget; b: LootBuffs } {
   return {
-    t: { attackBuff: 0, defenseBuff: 0, healCharges: 0 },
-    b: { attackMult: 1, defenseReduce: 0 },
+    t: { attackBuff: 0, defenseBuff: 0, healCharges: 0, weapon: "" },
+    b: { attackMult: 1, defenseReduce: 0, knockback: 0 },
   };
 }
 
@@ -76,22 +79,40 @@ describe("loot rolls (deterministic RNG)", () => {
     expect(rollCategory(() => 0)).toBe("attack");
     expect(rollCategory(() => 0.999)).toBe("heal");
   });
+
+  it("rollWeapon hits the bottom and top of the weight table", () => {
+    expect(rollWeapon(() => 0).name).toBe("shortsword"); // first bucket
+    expect(rollWeapon(() => 0.999).name).toBe("warhammer"); // last bucket
+  });
 });
 
 describe("applyLootEffect", () => {
-  it("attack pickup sets the buff timer and the multiplier", () => {
+  it("a weapon pickup equips its duration, multiplier, and knockback", () => {
     const { t, b } = freshTarget();
-    const kept = applyLootEffect(t, b, { rarity: "rare", category: "attack" });
+    const hammer = weaponByName("warhammer");
+    const kept = applyLootEffect(t, b, { rarity: hammer.rarity, category: "attack", variant: "warhammer" });
     expect(kept).toBe(true);
-    expect(t.attackBuff).toBe(BUFF_DURATION);
-    expect(b.attackMult).toBe(rarityByName("rare").attackMult);
+    expect(t.attackBuff).toBe(hammer.duration);
+    expect(b.attackMult).toBe(hammer.attackMult);
+    expect(b.knockback).toBe(hammer.knockback);
+    expect(t.weapon).toBe("warhammer"); // HUD shows the equipped weapon
   });
 
-  it("never downgrades an already-stronger active buff", () => {
+  it("an unknown/empty weapon variant falls back to the first weapon", () => {
     const { t, b } = freshTarget();
-    applyLootEffect(t, b, { rarity: "legendary", category: "attack" }); // strong
-    applyLootEffect(t, b, { rarity: "common", category: "attack" }); // weaker
-    expect(b.attackMult).toBe(rarityByName("legendary").attackMult);
+    applyLootEffect(t, b, { rarity: "common", category: "attack" }); // no variant
+    expect(b.attackMult).toBe(weaponByName("shortsword").attackMult);
+  });
+
+  it("never downgrades a stronger weapon's power, knockback, or remaining time", () => {
+    const { t, b } = freshTarget();
+    applyLootEffect(t, b, { rarity: "legendary", category: "attack", variant: "warhammer" }); // strong
+    applyLootEffect(t, b, { rarity: "common", category: "attack", variant: "shortsword" }); // weaker
+    const hammer = weaponByName("warhammer");
+    expect(b.attackMult).toBe(hammer.attackMult);
+    expect(b.knockback).toBe(hammer.knockback);
+    expect(t.attackBuff).toBe(hammer.duration); // shorter shortsword timer didn't cut it
+    expect(t.weapon).toBe("warhammer"); // icon stays the stronger weapon
   });
 
   it("upgrades to a stronger buff and refreshes the timer", () => {
@@ -126,6 +147,39 @@ describe("combat damage", () => {
     expect(mobDamageAfterDefense(false, 0.5)).toBe(MOB_DAMAGE);
     expect(mobDamageAfterDefense(true, 0.5)).toBe(MOB_DAMAGE * 0.5);
     expect(mobDamageAfterDefense(true, 0)).toBe(MOB_DAMAGE);
+  });
+});
+
+describe("applyKnockback", () => {
+  // 5-wide, 1-tall open corridor (walls top/bottom are implicit via OOB on a
+  // single row); use a tall open room so horizontal pushes have headroom.
+  const T = 16;
+  const open = [
+    [1, 1, 1, 1, 1],
+    [1, 0, 0, 0, 1],
+    [1, 0, 0, 0, 1],
+    [1, 0, 0, 0, 1],
+    [1, 1, 1, 1, 1],
+  ];
+
+  it("shoves the mob directly away from the attacker", () => {
+    // Attacker at the center tile, mob just to its right → pushed further right.
+    const r = applyKnockback(open, 5, 5, T, 40, 40, 48, 40, 16, 5);
+    expect(r.x).toBeGreaterThan(48);
+    expect(r.y).toBeCloseTo(40);
+  });
+
+  it("stops at a wall instead of tunnelling through it", () => {
+    // Mob hugging the right-open edge, big shove right: it can't enter the wall
+    // column (x >= 64), so it stays within the open area minus its radius.
+    const r = applyKnockback(open, 5, 5, T, 24, 40, 56, 40, 200, 5);
+    expect(r.x).toBeLessThanOrEqual(64 - 5);
+    expect(r.x).toBeGreaterThan(24);
+  });
+
+  it("is a no-op when the attacker is exactly on the mob", () => {
+    const r = applyKnockback(open, 5, 5, T, 40, 40, 40, 40, 32, 5);
+    expect(r).toEqual({ x: 40, y: 40 });
   });
 });
 
