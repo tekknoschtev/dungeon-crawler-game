@@ -15,13 +15,20 @@ the local player is identified by their yellow name label rather than a drawn ri
 - Author / creator: Kenney (www.kenney.nl)
 - License: CC0 1.0 (public domain — free for any use, no attribution required)
 - License URL: https://creativecommons.org/publicdomain/zero/1.0/
-- Used for: dungeon floor/wall tiles and the hero sprite. We ship the packed
-  spritesheet `Tilemap/tilemap_packed.png` (16×16 tiles, 12 columns, no spacing)
-  as `client/public/assets/tiny-dungeon/tilemap_packed.png`. Frames in use:
-  #48 (floor), #40 (wall), #96 (knight/hero, tinted per player).
+- Used for: dungeon floor/wall tiles, the hero sprite, mobs, loot, floor
+  decoration, and death markers. We ship the packed spritesheet
+  `Tilemap/tilemap_packed.png` (16×16 tiles, 12 columns, no spacing) as
+  `client/public/assets/tiny-dungeon/tilemap_packed.png`. Frames in use:
+  #48 (floor), plus the wall autotile set (#4/#5/#13/#15/#26/#30/#40/#57/#58/#59
+  and inner corners #18/#25/#27), #96 (knight/hero, tinted per player),
+  #108 (slime mob), #103/#115 (sword/potion loot). Floor decoration (added
+  2026-06-19): #49 (speckle floor) and #42 (paved-stone floor) as client-side
+  texture variation, plus solid collidable props #63/#75 (crate stacks), #73
+  (barrel), #74 (anvil), #82 (keg) placed server-side on room edges. Death
+  markers reuse #64 (gravestone), tinted to the fallen hero's color.
 - Modifications: none (shipped the packed sheet as-is; raw pack extracted under
   the gitignored `assets-src/tiny-dungeon/`).
-- Date added: 2026-06-16
+- Date added: 2026-06-16 (floor decoration + death markers: 2026-06-19)
 
 ### Original — steel shield icon (loot)
 - Source URL: n/a (created for this project)

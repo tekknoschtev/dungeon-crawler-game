@@ -74,6 +74,52 @@ describe("loadMap", () => {
     }
   });
 
+  it("places props only on floor tiles with exactly one wall neighbor", () => {
+    const { grid, props } = loadMap(2024);
+    const isWall = (x: number, y: number) =>
+      x < 0 || y < 0 || x >= MAP_W || y >= MAP_H || grid[y][x] === 1;
+    for (const p of props) {
+      expect(grid[p.y][p.x]).toBe(0); // on floor
+      const walls =
+        (isWall(p.x, p.y - 1) ? 1 : 0) +
+        (isWall(p.x + 1, p.y) ? 1 : 0) +
+        (isWall(p.x, p.y + 1) ? 1 : 0) +
+        (isWall(p.x - 1, p.y) ? 1 : 0);
+      expect(walls).toBe(1); // a room edge, never a corridor or open floor
+    }
+  });
+
+  it("keeps the dungeon fully connected with props treated as solid", () => {
+    for (const seed of [1, 42, 777, 31337, 2024]) {
+      const { grid, spawns, props } = loadMap(seed);
+      const blocked = props.map((p) => `${p.x},${p.y}`);
+      const blockedSet = new Set(blocked);
+      // No two props at the same tile, and none on a spawn.
+      expect(blockedSet.size).toBe(props.length);
+      for (const s of spawns) {
+        expect(blockedSet.has(`${Math.floor(s.x / TILE)},${Math.floor(s.y / TILE)}`)).toBe(false);
+      }
+      // Flood the walkable space (floor minus props) from a spawn; it must reach
+      // every non-prop floor tile.
+      const start = spawns[0];
+      const seen = new Set<string>();
+      const stack: [number, number][] = [[Math.floor(start.x / TILE), Math.floor(start.y / TILE)]];
+      while (stack.length) {
+        const [x, y] = stack.pop()!;
+        if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) continue;
+        const key = `${x},${y}`;
+        if (grid[y][x] !== 0 || blockedSet.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+      }
+      expect(seen.size).toBe(totalFloor(grid) - props.length);
+    }
+  });
+
+  it("is deterministic in props for a given seed", () => {
+    expect(loadMap(2024).props).toEqual(loadMap(2024).props);
+  });
+
   it("leaves no wall nub touching floor on 3+ orthogonal sides", () => {
     const { grid } = loadMap(555);
     const floorNeighbors = (x: number, y: number) => {

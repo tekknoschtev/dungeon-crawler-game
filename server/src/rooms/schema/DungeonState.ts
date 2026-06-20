@@ -43,11 +43,23 @@ export class Loot extends Schema {
 }
 
 /**
- * The full room state. Players, mobs, and loot, plus the dungeon seed + code.
+ * A tombstone left where a hero died, tinted to that hero's color. Decorative
+ * (not collidable), but server-owned so late-joiners see markers laid down
+ * before they arrived. Capped + culled oldest-first (see MAX_DEATH_MARKERS).
+ */
+export class DeathMarker extends Schema {
+  @type("number") x: number = 0;
+  @type("number") y: number = 0;
+  @type("string") color: string = "#ffffff"; // the fallen hero's color
+}
+
+/**
+ * The full room state. Players, mobs, loot, and death markers, plus the dungeon
+ * seed + code.
  *
  * The seed is the single source of truth for this room's layout; the code is the
- * shareable join identifier (see DungeonRoom). Mobs and loot are dynamic — driven
- * by the server simulation, not the seed.
+ * shareable join identifier (see DungeonRoom). Mobs, loot, and markers are
+ * dynamic — driven by the server simulation, not the seed.
  */
 export class DungeonState extends Schema {
   @type("number") seed: number = 0;
@@ -55,4 +67,5 @@ export class DungeonState extends Schema {
   @type({ map: Player }) players = new MapSchema<Player>();
   @type({ map: Mob }) mobs = new MapSchema<Mob>();
   @type({ map: Loot }) loot = new MapSchema<Loot>();
+  @type({ map: DeathMarker }) markers = new MapSchema<DeathMarker>();
 }
