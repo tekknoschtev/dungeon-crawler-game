@@ -149,7 +149,13 @@
         align-items: center;
         justify-content: center;
         gap: 16px;
-        margin-bottom: 18px;
+        margin-bottom: 12px;
+      }
+      .color-swatch {
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
       }
       .hero-arrow {
         width: 38px;
@@ -381,11 +387,17 @@
           Name
           <input id="name" maxlength="16" autocomplete="off" />
         </label>
-        <span class="picker-label">Hero color</span>
+        <span class="picker-label">Hero</span>
         <div class="hero-picker">
-          <button id="hero-prev" class="hero-arrow" type="button" aria-label="Previous color">‹</button>
+          <button id="hero-prev" class="hero-arrow" type="button" aria-label="Previous hero">‹</button>
           <canvas id="hero-canvas" class="hero-canvas" width="72" height="72" aria-label="Hero preview"></canvas>
-          <button id="hero-next" class="hero-arrow" type="button" aria-label="Next color">›</button>
+          <button id="hero-next" class="hero-arrow" type="button" aria-label="Next hero">›</button>
+        </div>
+        <span class="picker-label">Color</span>
+        <div class="hero-picker">
+          <button id="color-prev" class="hero-arrow" type="button" aria-label="Previous color">‹</button>
+          <div id="color-swatch" class="color-swatch" aria-label="Color preview"></div>
+          <button id="color-next" class="hero-arrow" type="button" aria-label="Next color">›</button>
         </div>
         <button id="create" class="primary">Create Room</button>
         <div id="ordivider" class="divider">— or join with a code —</div>

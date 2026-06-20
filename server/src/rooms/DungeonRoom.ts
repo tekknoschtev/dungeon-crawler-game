@@ -31,6 +31,7 @@ import {
   mobDamageAfterDefense,
   regenHp,
   isAllowedColor,
+  isAllowedSprite,
   pickAggroTarget,
   type AggroCandidate,
 } from "./logic";
@@ -89,6 +90,13 @@ interface MobAI {
 // allowlist); unrecognised/absent picks fall back to round-robin assignment.
 // The client lobby mirrors this list (HERO_COLORS in lobby.ts) — keep them in sync.
 const COLORS = ["#ff5d73", "#4ec9ff", "#ffd65c", "#7cf36b", "#c08bff", "#ff9f45"];
+
+// Selectable hero bodies — Tiny Dungeon sheet frames (the humanoid characters at
+// #84–88 and #96–100). Picked in the lobby, tinted by the chosen color. The
+// client lobby mirrors this list (HERO_SPRITES in lobby.ts) — keep them in sync.
+// 96 (the armored knight) is the default for an unrecognised/absent pick.
+const HERO_SPRITES = [84, 85, 86, 87, 88, 96, 97, 98, 99, 100];
+const DEFAULT_HERO_SPRITE = 96;
 
 export class DungeonRoom extends Room<{ state: DungeonState }> {
   maxClients = 4;
@@ -177,7 +185,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     console.log(`DungeonRoom created: ${this.roomId} (code ${code})`);
   }
 
-  onJoin(client: Client, options: { name?: string; color?: string } = {}) {
+  onJoin(client: Client, options: { name?: string; color?: string; sprite?: number } = {}) {
     const player = new Player();
     const spawn = this.map.spawns[this.clients.length % this.map.spawns.length];
     player.x = spawn.x;
@@ -192,6 +200,11 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       player.color = COLORS[this.colorIndex % COLORS.length];
       this.colorIndex++;
     }
+    // Honor the lobby's hero-body pick if it's a known frame; otherwise the
+    // default knight. (No round-robin here — the color already varies the look.)
+    player.sprite = isAllowedSprite(options.sprite, HERO_SPRITES)
+      ? options.sprite!
+      : DEFAULT_HERO_SPRITE;
     player.name = (options.name && options.name.trim().slice(0, 16)) || `Hero ${this.clients.length}`;
 
     this.state.players.set(client.sessionId, player);

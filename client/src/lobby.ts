@@ -15,13 +15,21 @@ const HERO_COLORS = ["#ff5d73", "#4ec9ff", "#ffd65c", "#7cf36b", "#c08bff", "#ff
 let colorIndex = Math.floor(Math.random() * HERO_COLORS.length);
 let selectedColor = HERO_COLORS[colorIndex];
 
-// Hero sprite location in the Tiny Dungeon sheet — mirrors GameScene
-// (FRAME_HERO = 96 on a 12-col, 16px sheet → row 8, col 0). Tinting here
-// replicates Phaser's multiply tint so the lobby preview matches in-game.
+// Selectable hero bodies — Tiny Dungeon sheet frames (humanoid characters at
+// #84–88 and #96–100). Mirrors the server's HERO_SPRITES (DungeonRoom); the
+// server validates the pick against its own allowlist and falls back to the
+// default knight (#96) for anything it doesn't recognise, so keep these in sync.
+const HERO_SPRITES = [84, 85, 86, 87, 88, 96, 97, 98, 99, 100];
+// Start on a random body too, for variety in a fresh room.
+let spriteIndex = Math.floor(Math.random() * HERO_SPRITES.length);
+let selectedSprite = HERO_SPRITES[spriteIndex];
+
+// Tiny Dungeon sheet geometry — mirrors GameScene (12-col, 16px, no spacing;
+// frame index = row * 12 + col). Tinting here replicates Phaser's multiply tint
+// so the lobby preview matches in-game.
 const SHEET_SRC = "/assets/tiny-dungeon/tilemap_packed.png";
 const SHEET_COLS = 12;
 const TILE_SRC = 16;
-const FRAME_HERO = 96;
 
 const client = new Client(SERVER_URL);
 // Dev-only console handle for debugging matchmaking (stripped from prod builds).
@@ -101,23 +109,26 @@ function playerName(raw: string): string {
 }
 
 /**
- * Wire the hero preview + arrow buttons. The hero sprite is drawn to a canvas
- * and tinted with the current color (multiply, matching Phaser's setTint), and
- * the arrows cycle `selectedColor` through HERO_COLORS.
+ * Wire the hero preview + arrow buttons. The selected hero body is drawn to a
+ * canvas and tinted with the current color (multiply, matching Phaser's
+ * setTint). Left/right arrows cycle the body through HERO_SPRITES; up/down cycle
+ * the color through HERO_COLORS. A small swatch shows the raw color.
  */
 function setupHeroPicker() {
   const canvas = $<HTMLCanvasElement>("hero-canvas");
+  const swatch = $<HTMLDivElement>("color-swatch");
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
   const sheet = new Image();
-  const sx = (FRAME_HERO % SHEET_COLS) * TILE_SRC;
-  const sy = Math.floor(FRAME_HERO / SHEET_COLS) * TILE_SRC;
 
   const render = () => {
+    swatch.style.background = selectedColor;
     const d = canvas.width; // square; scaled-up hero fills the canvas
     ctx.clearRect(0, 0, d, d);
     if (!sheet.complete || sheet.naturalWidth === 0) return;
+    const sx = (selectedSprite % SHEET_COLS) * TILE_SRC;
+    const sy = Math.floor(selectedSprite / SHEET_COLS) * TILE_SRC;
     ctx.imageSmoothingEnabled = false;
     // 1) the hero frame, 2) multiply the tint over it, 3) clip back to the
     // sprite's alpha so the fill doesn't leak onto the transparent background.
@@ -131,21 +142,33 @@ function setupHeroPicker() {
     ctx.globalCompositeOperation = "source-over";
   };
 
-  const cycle = (step: number) => {
+  const cycleSprite = (step: number) => {
+    spriteIndex = (spriteIndex + step + HERO_SPRITES.length) % HERO_SPRITES.length;
+    selectedSprite = HERO_SPRITES[spriteIndex];
+    render();
+  };
+  const cycleColor = (step: number) => {
     colorIndex = (colorIndex + step + HERO_COLORS.length) % HERO_COLORS.length;
     selectedColor = HERO_COLORS[colorIndex];
     render();
   };
 
-  $<HTMLButtonElement>("hero-prev").addEventListener("click", () => cycle(-1));
-  $<HTMLButtonElement>("hero-next").addEventListener("click", () => cycle(1));
+  $<HTMLButtonElement>("hero-prev").addEventListener("click", () => cycleSprite(-1));
+  $<HTMLButtonElement>("hero-next").addEventListener("click", () => cycleSprite(1));
+  $<HTMLButtonElement>("color-prev").addEventListener("click", () => cycleColor(-1));
+  $<HTMLButtonElement>("color-next").addEventListener("click", () => cycleColor(1));
   // Arrow keys cycle too — but only while the lobby is open (once the game
-  // starts, arrows drive the hero) and not while typing in a field.
+  // starts, arrows drive the hero) and not while typing in a field. Left/right
+  // cycle the body; up/down cycle the color.
   const menu = $<HTMLDivElement>("menu");
   document.addEventListener("keydown", (e) => {
     if (menu.hidden || document.activeElement instanceof HTMLInputElement) return;
-    if (e.key === "ArrowLeft") cycle(-1);
-    else if (e.key === "ArrowRight") cycle(1);
+    if (e.key === "ArrowLeft") cycleSprite(-1);
+    else if (e.key === "ArrowRight") cycleSprite(1);
+    else if (e.key === "ArrowUp") cycleColor(-1);
+    else if (e.key === "ArrowDown") cycleColor(1);
+    else return;
+    e.preventDefault(); // don't let up/down scroll the lobby
   });
 
   sheet.onload = render;
@@ -157,7 +180,11 @@ async function createRoom(name: string) {
   if (busy) return;
   setBusy(true);
   try {
-    const room = await client.create(ROOM_NAME, { name: playerName(name), color: selectedColor });
+    const room = await client.create(ROOM_NAME, {
+      name: playerName(name),
+      color: selectedColor,
+      sprite: selectedSprite,
+    });
     enterGame(room);
   } catch (err) {
     console.error("Create failed:", err);
@@ -175,7 +202,12 @@ async function joinRoom(name: string, rawCode: string) {
   }
   setBusy(true);
   try {
-    const room = await client.join(ROOM_NAME, { name: playerName(name), code, color: selectedColor });
+    const room = await client.join(ROOM_NAME, {
+      name: playerName(name),
+      code,
+      color: selectedColor,
+      sprite: selectedSprite,
+    });
     enterGame(room);
   } catch (err) {
     console.error("Join failed:", err);
