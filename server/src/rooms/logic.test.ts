@@ -25,6 +25,8 @@ import {
   killScore,
   lootScore,
   depthScore,
+  chestPoints,
+  rollRelic,
   type LootTarget,
   type LootBuffs,
 } from "./logic";
@@ -38,6 +40,9 @@ import {
   SCORE_MULT_MAX,
   SCORE_DEPTH_BONUS,
   LOOT_SCORE,
+  CHEST_BASE_POINTS,
+  RELIC_ADJECTIVES,
+  RELIC_NOUNS,
   rarityByName,
   weaponByName,
 } from "./tuning";
@@ -383,5 +388,40 @@ describe("scoring", () => {
     expect(depthScore(1, 100)).toBe(100);
     expect(depthScore(4, 100)).toBe(400);
     expect(depthScore(3)).toBe(SCORE_DEPTH_BONUS * 3);
+  });
+});
+
+describe("vault chest (M4)", () => {
+  describe("chestPoints", () => {
+    it("is the base on floor 1 and scales with depth", () => {
+      expect(chestPoints(1)).toBe(CHEST_BASE_POINTS);
+      expect(chestPoints(4)).toBe(CHEST_BASE_POINTS * 4);
+      expect(chestPoints(3, 50)).toBe(150);
+    });
+  });
+
+  describe("rollRelic", () => {
+    it("rng=0 yields the lowest tier's first adjective + noun, no suffix", () => {
+      const name = rollRelic(() => 0, 1);
+      expect(name).toBe(`${RELIC_ADJECTIVES.worn[0]} ${RELIC_NOUNS.worn[0]}`);
+      expect(name).not.toContain("of the");
+    });
+
+    it("rng→1 yields the top tier's last words plus a suffix", () => {
+      const name = rollRelic(() => 0.999, 1);
+      const adj = RELIC_ADJECTIVES.mythic;
+      const noun = RELIC_NOUNS.mythic;
+      expect(name.startsWith(`${adj[adj.length - 1]} ${noun[noun.length - 1]}`)).toBe(true);
+      expect(name).toContain("of the");
+    });
+
+    it("a deeper depth raises the rarity floor (rng=0 climbs above the worn tier)", () => {
+      const shallow = rollRelic(() => 0, 1);
+      const deep = rollRelic(() => 0, 9); // floor pushed well above worn
+      expect(shallow).toBe(`${RELIC_ADJECTIVES.worn[0]} ${RELIC_NOUNS.worn[0]}`);
+      expect(deep).not.toBe(shallow);
+      // At depth 9 the floor tier is mythic, so rng=0 lands on mythic's first words.
+      expect(deep).toContain(RELIC_ADJECTIVES.mythic[0]);
+    });
   });
 });

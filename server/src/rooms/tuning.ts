@@ -108,6 +108,65 @@ export const LOOT_SCORE: Record<string, number> = {
 // cap it — old markers are culled oldest-first once there are more than this.
 export const MAX_DEATH_MARKERS = 24;
 
+// --- Vault chest (M4) --------------------------------------------------
+// One vault per floor: visible from arrival, sealed behind a timed door that
+// opens once the floor's heat is already spicy. Cracking it open under fire pays
+// depth-scaled mega-points (×heat multiplier, un-banked like all floor score),
+// plus the opener gets a full heal + a long buff + a flavor relic. The unlock
+// time is the headline feel knob — it should land right as "should I leave?"
+// starts to bite (heat ≈ 0.6 on the 150s ramp).
+export const CHEST_UNLOCK_TIME = 90; // s on the floor before the door opens
+export const CHEST_HP = 1; // one solid swing cracks it open (no chip-away grind)
+export const CHEST_RADIUS = 7; // px — melee reach to chip it (added to PLAYER_ATTACK_RANGE)
+export const CHEST_BASE_POINTS = 60; // × depth, × heat multiplier — the mega-reward base
+export const CHEST_BUFF_DURATION = 18; // s of attack + defense buff granted to the opener
+
+// Relic: a procedurally-named flavor trophy the opener keeps for the run (never
+// held or used — score-screen flavor only). A rarity is rolled (weighted, biased
+// deeper) then a name is built from rarity-tiered word pools. Rarer/deeper chests
+// roll grander names. Mirrors the RARITIES table pattern.
+export interface RelicRarity {
+  name: string;
+  weight: number;
+}
+// Keep "worn" first and "mythic" last: logic.test.ts pins rollRelic's bottom/top
+// tiers to that order. Deeper floors shift the rarity floor up (see rollRelic).
+export const RELIC_RARITIES: RelicRarity[] = [
+  { name: "worn", weight: 50 },
+  { name: "fine", weight: 28 },
+  { name: "ornate", weight: 14 },
+  { name: "regal", weight: 6 },
+  { name: "mythic", weight: 2 },
+];
+export const RELIC_RARITY_TOTAL = RELIC_RARITIES.reduce((sum, r) => sum + r.weight, 0);
+
+// Per-rarity word pools. A relic name is `${adjective} ${noun}` plus, for the
+// grander tiers, an optional " of the ${suffix}". Indexed by rarity name; deeper
+// tiers read grander. (rng picks within each pool; see rollRelic.)
+export const RELIC_ADJECTIVES: Record<string, string[]> = {
+  worn: ["Cracked", "Rusty", "Chipped", "Dull", "Mossy"],
+  fine: ["Polished", "Sturdy", "Keen", "Burnished", "Etched"],
+  ornate: ["Gilded", "Jeweled", "Runed", "Silvered", "Filigreed"],
+  regal: ["Radiant", "Hallowed", "Imperial", "Resplendent", "Astral"],
+  mythic: ["Eternal", "Godforged", "Abyssal", "Celestial", "Sovereign"],
+};
+export const RELIC_NOUNS: Record<string, string[]> = {
+  worn: ["Spoon", "Trinket", "Buckle", "Token", "Charm"],
+  fine: ["Chalice", "Locket", "Sigil", "Pendant", "Idol"],
+  ornate: ["Crown", "Scepter", "Reliquary", "Talisman", "Diadem"],
+  regal: ["Fang", "Heart", "Eye", "Crucible", "Aegis"],
+  mythic: ["Fang", "Heart", "Eye", "Throne", "Star"],
+};
+// Suffix pool ("… of the ___"), only appended for the grander tiers (see rollRelic).
+export const RELIC_SUFFIXES = [
+  "Deep", "Abyss", "Forgotten", "Ember", "Void", "Dawn", "Hollow", "Storm",
+];
+// Every RELIC_DEPTH_STEP floors, the lowest rarity a relic can roll climbs one
+// rung — so deeper chests can't hand out a "Cracked Spoon." Suffixes (" of the
+// ___") only attach from the RELIC_SUFFIX_MIN_TIER rung up (ornate and grander).
+export const RELIC_DEPTH_STEP = 2;
+export const RELIC_SUFFIX_MIN_TIER = 2; // index into RELIC_RARITIES (0 = worn)
+
 export interface Rarity {
   name: string;
   weight: number;

@@ -1,4 +1,4 @@
-import { Schema, MapSchema, type } from "@colyseus/schema";
+import { Schema, MapSchema, ArraySchema, type } from "@colyseus/schema";
 
 /**
  * A single player's networked state.
@@ -42,6 +42,11 @@ export class Player extends Schema {
   // current floor's gain is forfeited on a wipe; descending banks it (see
   // DungeonRoom). The HUD + score screen read this directly.
   @type("number") score: number = 0;
+  // --- Relics (M4) ---
+  // Procedurally-named flavor trophies this hero has unsealed from vault chests
+  // (one per chest they open). Never held or used — score-screen flavor only.
+  // Churns only on an open (rare); persists across floors, cleared on restart.
+  @type(["string"]) relics = new ArraySchema<string>();
 }
 
 /** A server-driven enemy. Position is simulated and synced every tick. */
@@ -80,8 +85,34 @@ export class DeathMarker extends Schema {
 }
 
 /**
- * The full room state. Players, mobs, loot, and death markers, plus the dungeon
- * seed + code.
+ * The per-floor vault chest (M4): visible from arrival, sealed behind a timed
+ * door that opens once the floor's heat is spicy, then cracked open by attacking
+ * it. One per floor (a `chests` MapSchema with a single entry, reusing the
+ * onAdd/onRemove render pattern). Re-armed each descent; cleared on the old floor.
+ */
+export class Chest extends Schema {
+  @type("number") x: number = 0; // chest render position (px)
+  @type("number") y: number = 0;
+  // The sealing door's TILE coords, or (-1,-1) for the magic-seal fallback (no
+  // physical door tile — the client shows a shimmer/lock instead of a gate).
+  @type("int16") doorX: number = -1;
+  @type("int16") doorY: number = -1;
+  // Door shut + chest impervious. Flips false when unlockIn hits 0 (the door
+  // tile, if any, becomes passable then too).
+  @type("boolean") locked: boolean = true;
+  // Seconds until the door opens (ticks down while locked, like respawnIn; 0 once
+  // open). Drives the client's anticipation countdown.
+  @type("number") unlockIn: number = 0;
+  // Break progress once unlocked — churns only while being hit. hp<=0 → opened.
+  // (Tuned low — see CHEST_HP — so a single swing cracks it; the server sets the
+  // real value in placeVault.)
+  @type("number") hp: number = 1;
+  @type("number") maxHp: number = 1;
+}
+
+/**
+ * The full room state. Players, mobs, loot, death markers, and the per-floor
+ * vault chest, plus the dungeon seed + code.
  *
  * The seed is the single source of truth for this room's layout; the code is the
  * shareable join identifier (see DungeonRoom). Mobs, loot, and markers are
@@ -102,4 +133,7 @@ export class DungeonState extends Schema {
   @type({ map: Mob }) mobs = new MapSchema<Mob>();
   @type({ map: Loot }) loot = new MapSchema<Loot>();
   @type({ map: DeathMarker }) markers = new MapSchema<DeathMarker>();
+  // The per-floor vault chest — a single-entry map (one vault per floor), reusing
+  // the existing onAdd/onRemove render path. Cleared + re-armed each descent.
+  @type({ map: Chest }) chests = new MapSchema<Chest>();
 }

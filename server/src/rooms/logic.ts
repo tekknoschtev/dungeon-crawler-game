@@ -36,6 +36,13 @@ import {
   SCORE_MULT_MAX,
   SCORE_DEPTH_BONUS,
   LOOT_SCORE,
+  CHEST_BASE_POINTS,
+  RELIC_RARITIES,
+  RELIC_ADJECTIVES,
+  RELIC_NOUNS,
+  RELIC_SUFFIXES,
+  RELIC_DEPTH_STEP,
+  RELIC_SUFFIX_MIN_TIER,
   type Rarity,
   type Weapon,
 } from "./tuning";
@@ -394,4 +401,46 @@ export function lootScore(rarity: string, table: Record<string, number> = LOOT_S
 /** The per-descend depth bonus, banked on each descent — deeper descents pay more. */
 export function depthScore(depth: number, base: number = SCORE_DEPTH_BONUS): number {
   return base * depth;
+}
+
+// --- Vault chest (M4) --------------------------------------------------
+// The vault's pre-multiplier mega-reward, a dead-end "nook" finder for placing it,
+// and the procedural relic namer. All pure: the room feeds in the grid/depth/RNG
+// and applies the heat multiplier + reward split itself.
+
+/** Base mega-points a cracked chest is worth (before the heat multiplier); deeper = grander. */
+export function chestPoints(depth: number, base: number = CHEST_BASE_POINTS): number {
+  return base * depth;
+}
+
+export interface Vec {
+  x: number;
+  y: number;
+}
+
+/**
+ * Roll a procedurally-named relic for the chest opener — flavor only. Picks a
+ * rarity (weighted, with the floor raised by depth so deep chests can't hand out
+ * the lowest tier), then builds `${adjective} ${noun}` from that tier's pools,
+ * plus " of the ${suffix}" for the grander tiers. Deterministic for a given rng +
+ * depth. With rng=0 you get the floor tier + first words; rng→1 the top tier +
+ * last words.
+ */
+export function rollRelic(rng: Rng = Math.random, depth: number = 1): string {
+  // Depth raises the lowest tier a relic can roll (the rarity "floor").
+  const floor = Math.min(
+    RELIC_RARITIES.length - 1,
+    Math.floor(Math.max(0, depth - 1) / RELIC_DEPTH_STEP)
+  );
+  const pool = RELIC_RARITIES.slice(floor);
+  const total = pool.reduce((sum, r) => sum + r.weight, 0);
+  const rarity = rollWeighted(pool, total, rng);
+  const tier = RELIC_RARITIES.findIndex((r) => r.name === rarity.name);
+
+  const pick = <T>(list: T[]): T => list[Math.min(list.length - 1, Math.floor(rng() * list.length))];
+  const adj = pick(RELIC_ADJECTIVES[rarity.name]);
+  const noun = pick(RELIC_NOUNS[rarity.name]);
+  let name = `${adj} ${noun}`;
+  if (tier >= RELIC_SUFFIX_MIN_TIER) name += ` of the ${pick(RELIC_SUFFIXES)}`;
+  return name;
 }
