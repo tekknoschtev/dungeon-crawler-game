@@ -31,6 +31,11 @@ import {
   DEPTH_HP_SCALE,
   DEPTH_DAMAGE_SCALE,
   RESPAWN_DELAYS,
+  SCORE_PER_KILL,
+  SCORE_DEPTH_SCALE,
+  SCORE_MULT_MAX,
+  SCORE_DEPTH_BONUS,
+  LOOT_SCORE,
   type Rarity,
   type Weapon,
 } from "./tuning";
@@ -359,4 +364,34 @@ export function scaleMobHp(baseHp: number, depth: number, scale: number = DEPTH_
 /** Mob contact damage scaled for depth (1-based; floor 1 unchanged). */
 export function scaleMobDamage(baseDmg: number, depth: number, scale: number = DEPTH_DAMAGE_SCALE): number {
   return baseDmg * (1 + scale * (depth - 1));
+}
+
+// --- Scoring -----------------------------------------------------------
+// Kills and loot score at a live multiplier that climbs with the floor's heat,
+// so dwelling (which floods the floor with targets) mints points fast; descending
+// banks the haul and drops the multiplier back to 1. All pure — the room feeds in
+// the current heat/depth/rarity, so the curve is unit-testable without a clock.
+
+/** Score multiplier from floor heat: ×1 calm → ×maxMult at full heat, clamped. */
+export function scoreMultiplier(heat: number, maxMult: number = SCORE_MULT_MAX): number {
+  return lerp(1, maxMult, clamp01(heat));
+}
+
+/** Base points for killing a mob (before the heat multiplier); deeper = worth more. */
+export function killScore(
+  depth: number,
+  base: number = SCORE_PER_KILL,
+  scale: number = SCORE_DEPTH_SCALE
+): number {
+  return base * (1 + scale * (depth - 1));
+}
+
+/** Base points a picked-up drop is worth by rarity (before the heat multiplier). */
+export function lootScore(rarity: string, table: Record<string, number> = LOOT_SCORE): number {
+  return table[rarity] ?? table.common;
+}
+
+/** The per-descend depth bonus, banked on each descent — deeper descents pay more. */
+export function depthScore(depth: number, base: number = SCORE_DEPTH_BONUS): number {
+  return base * depth;
 }

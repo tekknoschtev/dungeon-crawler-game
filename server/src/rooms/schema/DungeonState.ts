@@ -36,6 +36,12 @@ export class Player extends Schema {
   // Seconds until the self-respawn button unlocks; only nonzero while downed with
   // lives left (same per-tick countdown pattern as attackBuff). 0 = ready / N/A.
   @type("number") respawnIn: number = 0;
+  // --- Scoring (M3) ---
+  // Live run score = banked floors + the current floor's un-banked gain. Churns
+  // only on discrete events (a kill, a pickup, a descend), never per-tick. The
+  // current floor's gain is forfeited on a wipe; descending banks it (see
+  // DungeonRoom). The HUD + score screen read this directly.
+  @type("number") score: number = 0;
 }
 
 /** A server-driven enemy. Position is simulated and synced every tick. */

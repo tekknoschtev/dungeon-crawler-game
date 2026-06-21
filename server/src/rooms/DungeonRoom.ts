@@ -42,6 +42,10 @@ import {
   pickAggroTarget,
   respawnDelay,
   isWipe,
+  scoreMultiplier,
+  killScore,
+  lootScore,
+  depthScore,
   heatLevel,
   targetMobCount,
   spawnInterval,
@@ -99,6 +103,10 @@ interface Combat {
   // How many times this hero has self-respawned this run — indexes the ramping
   // respawn delay (revives don't count). Reset on restart.
   respawnsUsed: number;
+  // Snapshot of Player.score at the last descend. The current floor's un-banked
+  // gain is `score - bankedScore`: descending banks it (banked = score), a wipe
+  // forfeits it (score = banked). See checkWipe / updateDescent.
+  bankedScore: number;
   attackMult: number; // active attack-buff damage multiplier (1 = none)
   defenseReduce: number; // active defense-buff damage reduction 0..1 (0 = none)
   knockback: number; // px a hit mob is shoved by the equipped weapon (0 = none)
@@ -219,7 +227,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
 
     this.state.players.set(client.sessionId, player);
     this.inputs.set(client.sessionId, { up: false, down: false, left: false, right: false });
-    this.combat.set(client.sessionId, { attackReadyAt: 0, respawnReadyAt: 0, respawnsUsed: 0, attackMult: 1, defenseReduce: 0, knockback: 0 });
+    this.combat.set(client.sessionId, { attackReadyAt: 0, respawnReadyAt: 0, respawnsUsed: 0, bankedScore: 0, attackMult: 1, defenseReduce: 0, knockback: 0 });
 
     // The map is sent when the client signals "ready" (see onCreate), not here.
     console.log(`${player.name} joined (${client.sessionId}). Players: ${this.clients.length}`);
@@ -326,13 +334,19 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       // reposition is unseen. enterFloor resets the channel + ramp.
       this.descending = true;
       this.broadcast("descend");
+      const fromDepth = this.state.depth;
       this.clock.setTimeout(() => {
-        // Descending banks a life (capped) — racing deep buys survivability. Done
-        // here, on the actual descent, not in enterFloor (shared with create/restart).
-        this.state.players.forEach((p) => {
+        this.state.players.forEach((p, sid) => {
+          // Descending banks a life (capped) — racing deep buys survivability.
           p.respawnsLeft = Math.min(LIFE_CAP, p.respawnsLeft + 1);
+          // ...and banks the score chase: grant the cleared floor's depth bonus,
+          // then lock the whole floor's haul in (banked = current score) so a later
+          // wipe can no longer forfeit it. enterFloor resets heat → multiplier to ×1.
+          p.score += depthScore(fromDepth);
+          const c = this.combat.get(sid);
+          if (c) c.bankedScore = p.score;
         });
-        this.enterFloor(this.state.depth + 1);
+        this.enterFloor(fromDepth + 1);
         this.descending = false;
       }, DESCEND_FADE_MS);
     }
@@ -353,7 +367,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       if (dist(mob.x, mob.y, player.x, player.y) <= PLAYER_ATTACK_RANGE + MOB_RADIUS) {
         mob.hp -= damage;
         if (mob.hp <= 0) {
-          this.killMob(id, mob);
+          this.killMob(id, mob, sessionId);
         } else if (knockback > 0) {
           const k = applyKnockback(
             this.collision, this.map.width, this.map.height, TILE,
@@ -438,11 +452,13 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       player.attackBuff = 0;
       player.defenseBuff = 0;
       player.weapon = "";
+      player.score = 0;
       const c = this.combat.get(sessionId);
       if (c) {
         c.attackReadyAt = 0;
         c.respawnReadyAt = 0;
         c.respawnsUsed = 0;
+        c.bankedScore = 0;
         c.attackMult = 1;
         c.defenseReduce = 0;
         c.knockback = 0;
@@ -452,7 +468,14 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.enterFloor(1);
   }
 
-  private killMob(id: string, mob: Mob) {
+  private killMob(id: string, mob: Mob, killerId: string) {
+    // Credit the killer at the floor's live multiplier — dwelling into high heat
+    // makes each kill worth more (the dwell payoff). Scored into Player.score; the
+    // current floor's gain rides un-banked until they descend (see updateDescent).
+    const killer = this.state.players.get(killerId);
+    if (killer) {
+      killer.score += Math.round(killScore(this.state.depth) * scoreMultiplier(this.state.heat));
+    }
     this.dropLoot(mob.x, mob.y);
     this.state.mobs.delete(id);
     this.mobAI.delete(id);
@@ -630,6 +653,8 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       // hold (full stack) is left on the floor instead of being wasted.
       this.state.loot.forEach((loot, lid) => {
         if (dist(loot.x, loot.y, player.x, player.y) <= PICKUP_RANGE && applyLootEffect(player, c, loot)) {
+          // Grabbing a drop scores by its rarity, at the floor's live multiplier.
+          player.score += Math.round(lootScore(loot.rarity) * scoreMultiplier(this.state.heat));
           this.state.loot.delete(lid);
         }
       });
@@ -677,6 +702,12 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       if (p.respawnsLeft > 0) anyLifeLeft = true;
     });
     if (isWipe(downed) && !anyLifeLeft) {
+      // Forfeit the current (un-banked) floor's haul — that's the risk that made
+      // dwelling for a fat multiplier a gamble. Already-descended floors are safe.
+      this.state.players.forEach((p, sid) => {
+        const c = this.combat.get(sid);
+        if (c) p.score = c.bankedScore;
+      });
       this.state.phase = "gameover";
       this.broadcast("gameover", { floor: this.state.depth });
     }
