@@ -26,6 +26,3 @@ assets-src/
 .vscode/
 *.suo
 *.user
-
-# personal scratch notes (not part of the project)
-docs/roadmap.md
