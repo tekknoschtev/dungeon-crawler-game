@@ -16,12 +16,25 @@ export const PLAYER_MAX_HP = 100;
 export const PLAYER_ATTACK_DAMAGE = 12;
 export const PLAYER_ATTACK_RANGE = 24; // px radius of the (omnidirectional) melee swing
 export const PLAYER_ATTACK_COOLDOWN = 0.45; // s
-export const RESPAWN_DELAY = 3; // s
 // Slow passive heal while alive, so heroes recover between fights without making
 // potions pointless. At 1.5 HP/s a full heal from near-death takes ~over a
 // minute — negligible mid-fight (a slime does 8/s), meaningful during a lull.
 // This is the main knob to dial after playtesting.
 export const PASSIVE_REGEN = 1.5; // HP/s
+
+// --- Run stakes (downed / respawn / lives) -----------------------------
+// A run is losable (M2). A hero at 0 HP is "downed", not dead: a ramping cooldown
+// counts down, then they spend a life to self-respawn OR wait for a teammate to
+// revive them for free. Lives are a run resource — you start below the cap and
+// bank +1 each descent, so racing deep buys survivability at the cost of score.
+export const STARTING_LIVES = 3; // lives every hero starts a run with (below LIFE_CAP)
+export const LIFE_CAP = 6; // most lives a hero can bank (the +1/descent guardrail)
+// Self-respawn unlock delay (s), indexed by how many times this hero has already
+// self-respawned this run (clamped to the last). Ramps so later deaths cost more
+// downtime — long enough that heat climbs meaningfully while you're down.
+export const RESPAWN_DELAYS = [4, 6, 9, 13, 18];
+export const REVIVE_RANGE = 18; // px — how close a healer must be to revive a downed ally
+export const REVIVE_HP_PCT = 0.5; // fraction of max HP a revived ally comes back with
 
 // --- Mobs --------------------------------------------------------------
 export const MOB_MAX_HP = 30;

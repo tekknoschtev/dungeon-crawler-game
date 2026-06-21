@@ -287,21 +287,89 @@
         background: linear-gradient(90deg, #4ec9ff 0%, #ffd65c 60%, #ff5d73 100%);
         transition: width 200ms linear;
       }
-      #descend-hint {
+      #run-lives {
+        color: #ff8a9a;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+      }
+      #run-lives.empty {
+        color: #6a7180;
+      }
+      #descend-hint,
+      #revive-hint {
         position: fixed;
         top: 50px;
         left: 50%;
         transform: translateX(-50%);
         z-index: 10;
         padding: 4px 10px;
-        background: rgba(13, 30, 28, 0.85);
-        border: 1px solid #2f6f66;
         border-radius: 8px;
-        color: #9ffff0;
         font-size: 12px;
         pointer-events: none;
       }
-      #descend-hint[hidden] {
+      #descend-hint {
+        background: rgba(13, 30, 28, 0.85);
+        border: 1px solid #2f6f66;
+        color: #9ffff0;
+      }
+      #revive-hint {
+        top: 78px;
+        background: rgba(30, 18, 13, 0.85);
+        border: 1px solid #7a5a2f;
+        color: #ffd9a0;
+      }
+      #descend-hint[hidden],
+      #revive-hint[hidden] {
+        display: none;
+      }
+
+      /* --- Center overlays: downed (countdown + Respawn) and game-over --- */
+      .center-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 12;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        /* See the action through it; only the card catches clicks. */
+        pointer-events: none;
+        background: rgba(5, 6, 10, 0.42);
+      }
+      .center-overlay[hidden] {
+        display: none;
+      }
+      #gameover {
+        background: rgba(5, 6, 10, 0.72);
+      }
+      .co-card {
+        pointer-events: auto;
+        min-width: 220px;
+        max-width: min(360px, 100%);
+        text-align: center;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 22px 24px;
+        box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+      }
+      .co-title {
+        font-size: 18px;
+        font-weight: bold;
+        letter-spacing: 0.5px;
+        color: var(--accent);
+        margin-bottom: 8px;
+      }
+      .co-sub {
+        font-size: 13px;
+        color: var(--muted);
+        margin-bottom: 16px;
+        min-height: 1em;
+      }
+      .co-card .primary {
+        width: 100%;
+      }
+      .co-card .primary[hidden] {
         display: none;
       }
       .hud-hp {
@@ -497,9 +565,30 @@
     <div id="run-hud" hidden>
       <span id="run-depth">Floor 1</span>
       <span class="heat-bar" title="floor pressure"><i id="run-heat-fill"></i></span>
+      <span id="run-lives" title="lives — spent on a self-respawn">♥×0</span>
     </div>
     <!-- Shown while a hero stands on the descent exit. -->
     <div id="descend-hint" hidden>▼ Hold here to descend</div>
+    <!-- Shown while a living hero stands over a downed ally (heal action revives). -->
+    <div id="revive-hint" hidden></div>
+
+    <!-- Center overlay while the local hero is down: countdown → Respawn button. -->
+    <div id="downed" class="center-overlay" hidden>
+      <div class="co-card">
+        <div class="co-title">You're down</div>
+        <div id="downed-sub" class="co-sub"></div>
+        <button id="respawn-btn" class="primary" hidden>Respawn</button>
+      </div>
+    </div>
+
+    <!-- Center overlay when the whole party falls (M2 placeholder; M3 → score screen). -->
+    <div id="gameover" class="center-overlay" hidden>
+      <div class="co-card">
+        <div class="co-title">Your party fell</div>
+        <div id="gameover-sub" class="co-sub"></div>
+        <button id="restart-btn" class="primary">Restart</button>
+      </div>
+    </div>
 
     <!-- In-game HUD: local hero's health + loot haul by rarity. -->
     <div id="hud" hidden>
