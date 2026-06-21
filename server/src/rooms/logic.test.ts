@@ -21,6 +21,10 @@ import {
   scaleMobDamage,
   respawnDelay,
   isWipe,
+  scoreMultiplier,
+  killScore,
+  lootScore,
+  depthScore,
   type LootTarget,
   type LootBuffs,
 } from "./logic";
@@ -30,6 +34,10 @@ import {
   BUFF_DURATION,
   MAX_HEAL_CHARGES,
   RESPAWN_DELAYS,
+  SCORE_PER_KILL,
+  SCORE_MULT_MAX,
+  SCORE_DEPTH_BONUS,
+  LOOT_SCORE,
   rarityByName,
   weaponByName,
 } from "./tuning";
@@ -343,5 +351,37 @@ describe("isWipe", () => {
 
   it("is false for an empty room", () => {
     expect(isWipe([])).toBe(false);
+  });
+});
+
+describe("scoring", () => {
+  it("scoreMultiplier runs ×1 calm → ×max at full heat, monotonic", () => {
+    expect(scoreMultiplier(0)).toBe(1);
+    expect(scoreMultiplier(1)).toBe(SCORE_MULT_MAX);
+    expect(scoreMultiplier(0.5)).toBeCloseTo(1 + (SCORE_MULT_MAX - 1) / 2);
+    expect(scoreMultiplier(0.25)).toBeGreaterThan(scoreMultiplier(0));
+    expect(scoreMultiplier(1)).toBeGreaterThan(scoreMultiplier(0.75));
+  });
+
+  it("scoreMultiplier clamps heat outside [0,1]", () => {
+    expect(scoreMultiplier(-1)).toBe(1);
+    expect(scoreMultiplier(2)).toBe(SCORE_MULT_MAX);
+  });
+
+  it("killScore is the base on floor 1 and grows with depth", () => {
+    expect(killScore(1)).toBe(SCORE_PER_KILL);
+    expect(killScore(6, 10, 0.1)).toBeCloseTo(15); // 10 * (1 + 0.5)
+  });
+
+  it("lootScore looks up by rarity and falls back to common", () => {
+    expect(lootScore("legendary")).toBe(LOOT_SCORE.legendary);
+    expect(lootScore("common")).toBe(LOOT_SCORE.common);
+    expect(lootScore("nonsense")).toBe(LOOT_SCORE.common);
+  });
+
+  it("depthScore scales the descend bonus with depth", () => {
+    expect(depthScore(1, 100)).toBe(100);
+    expect(depthScore(4, 100)).toBe(400);
+    expect(depthScore(3)).toBe(SCORE_DEPTH_BONUS * 3);
   });
 });

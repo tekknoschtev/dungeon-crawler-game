@@ -84,6 +84,25 @@ export const BUFF_DURATION = 9; // s — attack/defense buff length (longer: rar
 export const HEAL_PCT = 0.4; // fraction of max HP restored per quaffed potion
 export const MAX_HEAL_CHARGES = 5; // how many heal potions a hero can stockpile
 
+// --- Scoring (M3) ------------------------------------------------------
+// A run is a score chase. Kills and loot score at a live multiplier that climbs
+// with the floor's `heat` (dwelling at high heat mints points fast); descending
+// banks the floor's haul and resets the multiplier, while a wipe forfeits the
+// un-banked floor. So score embodies the dwell-vs-descend tension: greed vs safety.
+export const SCORE_PER_KILL = 10; // base points per mob (before depth + multiplier)
+export const SCORE_DEPTH_SCALE = 0.1; // +10% kill value per floor below 1 (tougher = worth more)
+export const SCORE_MULT_MAX = 3; // heat 1 ⇒ ×3 — the dwell payoff ceiling (headline knob)
+export const SCORE_DEPTH_BONUS = 100; // × depth, granted + banked on each descend
+// Points a picked-up drop is worth by rarity (before the multiplier). Tuned against
+// RARITIES' drop weights so a legendary reads as a jackpot, not just a bigger common.
+export const LOOT_SCORE: Record<string, number> = {
+  common: 15,
+  uncommon: 40,
+  rare: 100,
+  epic: 250,
+  legendary: 600,
+};
+
 // --- Death markers -----------------------------------------------------
 // A tombstone left where a hero fell, tinted to their color. Synced state, so
 // cap it — old markers are culled oldest-first once there are more than this.

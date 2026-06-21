@@ -295,6 +295,23 @@
       #run-lives.empty {
         color: #6a7180;
       }
+      #run-mult {
+        color: #4ec9ff;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      #run-score {
+        color: var(--accent);
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      #run-party {
+        color: #9ad8ff;
+        font-variant-numeric: tabular-nums;
+      }
+      #run-party[hidden] {
+        display: none;
+      }
       #descend-hint,
       #revive-hint {
         position: fixed;
@@ -371,6 +388,50 @@
       }
       .co-card .primary[hidden] {
         display: none;
+      }
+      /* Game-over score table: per-player rows + a party total. */
+      #score-board {
+        margin: 4px 0 16px;
+        text-align: left;
+      }
+      #score-list {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        margin-bottom: 6px;
+        max-height: 40vh;
+        overflow-y: auto;
+      }
+      .score-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        font-size: 13px;
+        color: var(--text);
+      }
+      .score-row.me {
+        background: rgba(255, 224, 102, 0.12);
+      }
+      .score-row.me .score-name {
+        color: var(--accent);
+        font-weight: bold;
+      }
+      .score-row.total {
+        border-top: 1px solid var(--line);
+        margin-top: 4px;
+        padding-top: 8px;
+        color: var(--muted);
+      }
+      .score-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .score-val {
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
       }
       .hud-hp {
         display: flex;
@@ -565,6 +626,9 @@
     <div id="run-hud" hidden>
       <span id="run-depth">Floor 1</span>
       <span class="heat-bar" title="floor pressure"><i id="run-heat-fill"></i></span>
+      <span id="run-mult" title="score multiplier — rises with floor heat, banked on descend">×1.0</span>
+      <span id="run-score" title="your run score">★ 0</span>
+      <span id="run-party" title="party total" hidden>Party 0</span>
       <span id="run-lives" title="lives — spent on a self-respawn">♥×0</span>
     </div>
     <!-- Shown while a hero stands on the descent exit. -->
@@ -586,6 +650,13 @@
       <div class="co-card">
         <div class="co-title">Your party fell</div>
         <div id="gameover-sub" class="co-sub"></div>
+        <div id="score-board">
+          <div id="score-list"></div>
+          <div class="score-row total">
+            <span class="score-name">Party total</span>
+            <span id="score-total" class="score-val">0</span>
+          </div>
+        </div>
         <button id="restart-btn" class="primary">Restart</button>
       </div>
     </div>

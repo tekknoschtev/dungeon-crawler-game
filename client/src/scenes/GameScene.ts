@@ -136,6 +136,9 @@ const HEAL_COOLDOWN_MS = 250; // light throttle on the heal action
 // Mirrors the server's REVIVE_RANGE (tuning.ts) — used only to surface the
 // contextual "revive" hint; the server is authoritative on the actual revive.
 const REVIVE_RANGE = 18; // px
+// Mirrors the server's SCORE_MULT_MAX (tuning.ts) — drives the displayed score
+// multiplier (×1 calm → ×max at full heat); the server owns the actual scoring.
+const SCORE_MULT_MAX = 3;
 
 /** Shapes decoded on the client (mirror the server schema). */
 interface PlayerView {
@@ -153,6 +156,7 @@ interface PlayerView {
   downed: boolean; // hp<=0, awaiting self-respawn or a revive (rendered greyed/prone)
   respawnsLeft: number; // lives remaining (0 = revive-only)
   respawnIn: number; // seconds until the self-respawn button unlocks (0 = ready / N/A)
+  score: number; // live run score (banked floors + current floor's un-banked gain)
 }
 
 interface MobView {
@@ -243,6 +247,9 @@ export class GameScene extends Phaser.Scene {
   // Throttle the depth/heat HUD so we only touch the DOM when a value changes.
   private lastDepthShown = -1;
   private lastHeatShown = -1;
+  private lastScoreShown = -1;
+  private lastPartyShown = -1;
+  private lastMultShown = -1;
   // True between the server's "descend" signal and the next floor's map arriving,
   // so buildMap knows to fade back in (the descent swaps floors under black).
   private descending = false;
@@ -866,20 +873,52 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** Show/hide the placeholder game-over overlay (with the floor reached). */
+  /**
+   * Show/hide the game-over score screen: floor reached + a per-player score
+   * table (sorted, local hero highlighted) + the party total. Scores are read
+   * from state (the server has already forfeited any un-banked floor by now).
+   */
   private setGameOverOverlay(show: boolean, floor?: number) {
     const el = document.getElementById("gameover");
     if (!el) return;
-    if (show) {
-      const sub = document.getElementById("gameover-sub");
-      if (sub && floor !== undefined) sub.textContent = `Reached Floor ${floor}`;
-      // The party is wiped — the per-player downed overlay gives way to this.
-      const downed = document.getElementById("downed");
-      if (downed) downed.hidden = true;
-      el.hidden = false;
-    } else {
+    if (!show) {
       el.hidden = true;
+      return;
     }
+    const sub = document.getElementById("gameover-sub");
+    if (sub && floor !== undefined) sub.textContent = `Reached Floor ${floor}`;
+    this.buildScoreTable();
+    // The party is wiped — the per-player downed overlay gives way to this.
+    const downed = document.getElementById("downed");
+    if (downed) downed.hidden = true;
+    el.hidden = false;
+  }
+
+  /** Render the score rows (name + score, sorted desc) and the party total. */
+  private buildScoreTable() {
+    const list = document.getElementById("score-list");
+    const totalEl = document.getElementById("score-total");
+    const players = (this.room?.state as { players?: Map<string, PlayerView> } | undefined)?.players;
+    if (!list || !players) return;
+    const rows = Array.from(players.entries())
+      .map(([id, p]) => ({ id, name: p.name, score: p.score ?? 0 }))
+      .sort((a, b) => b.score - a.score);
+    list.replaceChildren();
+    let total = 0;
+    for (const r of rows) {
+      total += r.score;
+      const row = document.createElement("div");
+      row.className = "score-row" + (r.id === this.localId ? " me" : "");
+      const name = document.createElement("span");
+      name.className = "score-name";
+      name.textContent = r.name; // user-supplied — textContent, never innerHTML
+      const val = document.createElement("span");
+      val.className = "score-val";
+      val.textContent = r.score.toLocaleString();
+      row.append(name, val);
+      list.appendChild(row);
+    }
+    if (totalEl) totalEl.textContent = total.toLocaleString();
   }
 
   /**
@@ -1061,9 +1100,11 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** Update the Floor/heat readout (throttled to actual changes). */
+  /** Update the Floor / heat / score / multiplier readouts (throttled to changes). */
   private updateRunHud() {
-    const st = this.room?.state as { depth?: number; heat?: number } | undefined;
+    const st = this.room?.state as
+      | { depth?: number; heat?: number; players?: Map<string, PlayerView> }
+      | undefined;
     if (!st) return;
     const depth = st.depth ?? 1;
     if (depth !== this.lastDepthShown) {
@@ -1073,11 +1114,51 @@ export class GameScene extends Phaser.Scene {
       const hud = document.getElementById("run-hud");
       if (hud) hud.hidden = false;
     }
-    const pct = Math.round((st.heat ?? 0) * 100);
+    const heat = st.heat ?? 0;
+    const pct = Math.round(heat * 100);
     if (pct !== this.lastHeatShown) {
       this.lastHeatShown = pct;
       const fill = document.getElementById("run-heat-fill");
       if (fill) fill.style.width = `${pct}%`;
+    }
+
+    // Score multiplier (×1 calm → ×max at full heat), tinted from cool→hot so you
+    // see heat becoming points. Throttled to a 2-decimal change.
+    const mult = 1 + heat * (SCORE_MULT_MAX - 1);
+    const multKey = Math.round(mult * 100);
+    if (multKey !== this.lastMultShown) {
+      this.lastMultShown = multKey;
+      const el = document.getElementById("run-mult");
+      if (el) {
+        el.textContent = `×${mult.toFixed(1)}`;
+        const c = Phaser.Display.Color.Interpolate.RGBWithRGB(78, 201, 255, 255, 93, 115, 100, Math.round(heat * 100));
+        el.style.color = `rgb(${c.r},${c.g},${c.b})`;
+      }
+    }
+
+    // Personal score + (in co-op) the party total, both live.
+    const players = st.players;
+    const me = players?.get(this.localId);
+    const myScore = me?.score ?? 0;
+    if (myScore !== this.lastScoreShown) {
+      this.lastScoreShown = myScore;
+      const el = document.getElementById("run-score");
+      if (el) el.textContent = `★ ${myScore.toLocaleString()}`;
+    }
+    let party = 0;
+    let count = 0;
+    players?.forEach((p) => {
+      party += p.score ?? 0;
+      count++;
+    });
+    const partyEl = document.getElementById("run-party");
+    if (partyEl) {
+      // Only meaningful with teammates; hidden solo (it would just echo your score).
+      partyEl.hidden = count < 2;
+      if (count >= 2 && party !== this.lastPartyShown) {
+        this.lastPartyShown = party;
+        partyEl.textContent = `Party ${party.toLocaleString()}`;
+      }
     }
   }
 
