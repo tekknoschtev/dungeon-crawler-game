@@ -7,7 +7,10 @@ import {
   PLAYER_MAX_HP,
   PLAYER_ATTACK_RANGE,
   PLAYER_ATTACK_COOLDOWN,
-  RESPAWN_DELAY,
+  STARTING_LIVES,
+  LIFE_CAP,
+  REVIVE_RANGE,
+  REVIVE_HP_PCT,
   MOB_MAX_HP,
   MOB_SPEED,
   MOB_RADIUS,
@@ -37,6 +40,8 @@ import {
   isAllowedColor,
   isAllowedSprite,
   pickAggroTarget,
+  respawnDelay,
+  isWipe,
   heatLevel,
   targetMobCount,
   spawnInterval,
@@ -85,10 +90,15 @@ interface InputState {
   right: boolean;
 }
 
-/** Per-player combat state (server-only; not synced). respawnAt 0 = alive. */
+/** Per-player combat state (server-only; not synced). */
 interface Combat {
   attackReadyAt: number;
-  respawnAt: number;
+  // Sim time the self-respawn button unlocks; set when a hero goes down, drives
+  // Player.respawnIn. Meaningless while up.
+  respawnReadyAt: number;
+  // How many times this hero has self-respawned this run — indexes the ramping
+  // respawn delay (revives don't count). Reset on restart.
+  respawnsUsed: number;
   attackMult: number; // active attack-buff damage multiplier (1 = none)
   defenseReduce: number; // active defense-buff damage reduction 0..1 (0 = none)
   knockback: number; // px a hit mob is shoved by the equipped weapon (0 = none)
@@ -161,8 +171,14 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     // by a per-player cooldown so a spammy client gains nothing.
     this.onMessage("attack", (client) => this.handleAttack(client.sessionId));
 
-    // Quaff the carried heal potion, if any.
+    // Quaff the carried heal potion — or, near a downed ally, spend it to revive them.
     this.onMessage("useHeal", (client) => this.handleUseHeal(client.sessionId));
+
+    // Spend a life to self-respawn once the downed cooldown has unlocked.
+    this.onMessage("respawn", (client) => this.handleRespawn(client.sessionId));
+
+    // Anyone can roll a fresh run from the game-over screen.
+    this.onMessage("restart", () => this.handleRestart());
 
     // The client requests the map once its renderer is ready (handlers wired),
     // rather than us pushing it in onJoin — that one-time payload would otherwise
@@ -197,10 +213,13 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       ? options.sprite!
       : DEFAULT_HERO_SPRITE;
     player.name = (options.name && options.name.trim().slice(0, 16)) || `Hero ${this.clients.length}`;
+    // Fresh life pool. A late joiner gets a full STARTING_LIVES (their own run
+    // resource); the +1/descent bonus accrues from here on (see updateDescent).
+    player.respawnsLeft = STARTING_LIVES;
 
     this.state.players.set(client.sessionId, player);
     this.inputs.set(client.sessionId, { up: false, down: false, left: false, right: false });
-    this.combat.set(client.sessionId, { attackReadyAt: 0, respawnAt: 0, attackMult: 1, defenseReduce: 0, knockback: 0 });
+    this.combat.set(client.sessionId, { attackReadyAt: 0, respawnReadyAt: 0, respawnsUsed: 0, attackMult: 1, defenseReduce: 0, knockback: 0 });
 
     // The map is sent when the client signals "ready" (see onCreate), not here.
     console.log(`${player.name} joined (${client.sessionId}). Players: ${this.clients.length}`);
@@ -289,6 +308,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
    * cancels it. Co-op-friendly — anyone can initiate, nobody has to clear first.
    */
   private updateDescent(dt: number) {
+    if (this.state.phase !== "playing") return; // run's over; no descending
     if (this.descending) return; // mid fade-out; the floor swap is already scheduled
     const ex = this.map.exit.x * TILE + TILE / 2;
     const ey = this.map.exit.y * TILE + TILE / 2;
@@ -307,6 +327,11 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       this.descending = true;
       this.broadcast("descend");
       this.clock.setTimeout(() => {
+        // Descending banks a life (capped) — racing deep buys survivability. Done
+        // here, on the actual descent, not in enterFloor (shared with create/restart).
+        this.state.players.forEach((p) => {
+          p.respawnsLeft = Math.min(LIFE_CAP, p.respawnsLeft + 1);
+        });
         this.enterFloor(this.state.depth + 1);
         this.descending = false;
       }, DESCEND_FADE_MS);
@@ -341,11 +366,90 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     });
   }
 
+  /**
+   * Spend the carried heal potion. Contextual: if a downed ally is within
+   * REVIVE_RANGE, the potion revives them (their life is preserved) instead of
+   * self-healing — reusing the heal action, no new control. Otherwise it tops up
+   * the caller's own HP. A downed caller can do neither.
+   */
   private handleUseHeal(sessionId: string) {
     const player = this.state.players.get(sessionId);
-    if (!player || player.hp <= 0 || player.healCharges <= 0) return;
+    if (!player || player.downed || player.healCharges <= 0) return;
+
+    const ally = this.nearestDownedAlly(sessionId, player.x, player.y);
+    if (ally) {
+      ally.player.hp = Math.max(1, Math.round(REVIVE_HP_PCT * ally.player.maxHp));
+      ally.player.downed = false;
+      ally.player.respawnIn = 0;
+      const ac = this.combat.get(ally.id);
+      if (ac) ac.respawnReadyAt = 0;
+      player.healCharges--;
+      return;
+    }
+
     player.hp = Math.min(player.maxHp, player.hp + HEAL_PCT * player.maxHp);
     player.healCharges--;
+  }
+
+  /** The closest downed ally to (x, y) within REVIVE_RANGE, or undefined. */
+  private nearestDownedAlly(
+    sessionId: string,
+    x: number,
+    y: number
+  ): { id: string; player: Player } | undefined {
+    let bestId = "";
+    let best = REVIVE_RANGE;
+    this.state.players.forEach((p, id) => {
+      if (id === sessionId || !p.downed) return;
+      const d = dist(x, y, p.x, p.y);
+      if (d <= best) {
+        best = d;
+        bestId = id;
+      }
+    });
+    if (bestId === "") return undefined;
+    return { id: bestId, player: this.state.players.get(bestId)! };
+  }
+
+  /** Spend a life to self-respawn, once down and the unlock cooldown has elapsed. */
+  private handleRespawn(sessionId: string) {
+    if (this.state.phase !== "playing") return;
+    const player = this.state.players.get(sessionId);
+    const c = this.combat.get(sessionId);
+    if (!player || !c || !player.downed) return;
+    if (player.respawnsLeft <= 0) return; // revive-only; no self-respawn
+    if (this.now < c.respawnReadyAt) return; // cooldown still running
+    this.respawn(player, c);
+    player.respawnsLeft--;
+    c.respawnsUsed++;
+  }
+
+  /** Roll a fresh run from the game-over screen: new dungeon, lives + state reset. */
+  private handleRestart() {
+    if (this.state.phase !== "gameover") return;
+    // New layout for the new run (each floor still derives from this + depth).
+    this.baseSeed = (Math.random() * 0x100000000) >>> 0;
+    this.state.players.forEach((player, sessionId) => {
+      player.hp = player.maxHp;
+      player.downed = false;
+      player.respawnIn = 0;
+      player.respawnsLeft = STARTING_LIVES;
+      player.healCharges = 0;
+      player.attackBuff = 0;
+      player.defenseBuff = 0;
+      player.weapon = "";
+      const c = this.combat.get(sessionId);
+      if (c) {
+        c.attackReadyAt = 0;
+        c.respawnReadyAt = 0;
+        c.respawnsUsed = 0;
+        c.attackMult = 1;
+        c.defenseReduce = 0;
+        c.knockback = 0;
+      }
+    });
+    this.state.phase = "playing";
+    this.enterFloor(1);
   }
 
   private killMob(id: string, mob: Mob) {
@@ -473,15 +577,19 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       const c = this.combat.get(sessionId);
       if (!c) return;
 
-      // Dead: count down to respawn; no movement or pickups meanwhile.
+      // Downed: hp<=0, awaiting a player-driven self-respawn or a teammate's
+      // revive. No movement or pickups meanwhile.
       if (player.hp <= 0) {
-        if (c.respawnAt === 0) {
-          // First tick dead → leave a tombstone where they fell.
-          c.respawnAt = this.now + RESPAWN_DELAY;
+        if (!player.downed) {
+          // First downed tick → mark down, leave a tombstone, and arm the ramping
+          // self-respawn cooldown (longer the more lives this hero has spent).
+          player.downed = true;
+          c.respawnReadyAt = this.now + respawnDelay(c.respawnsUsed);
           this.placeDeathMarker(player.x, player.y, player.color);
-        } else if (this.now >= c.respawnAt) {
-          this.respawn(player, c);
         }
+        // Tick the unlock countdown (only meaningful while lives remain — at 0
+        // there's no self-respawn button, just the wait for a revive).
+        player.respawnIn = player.respawnsLeft > 0 ? Math.max(0, c.respawnReadyAt - this.now) : 0;
         return;
       }
 
@@ -536,14 +644,42 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.state.mobs.forEach((mob, id) => this.updateMob(mob, id, dt, livingPlayers));
 
     // Top the population up toward the pressure target — the hotter the floor, the
-    // higher the target and the faster the top-ups.
-    if (this.state.mobs.size < targetMobCount(heat, this.state.depth) && this.now >= this.nextMobSpawnAt) {
+    // higher the target and the faster the top-ups. Frozen once the run is over.
+    if (
+      this.state.phase === "playing" &&
+      this.state.mobs.size < targetMobCount(heat, this.state.depth) &&
+      this.now >= this.nextMobSpawnAt
+    ) {
       this.spawnMob();
       this.nextMobSpawnAt = this.now + spawnInterval(heat);
     }
 
     // Let the party descend by holding the exit.
     this.updateDescent(dt);
+
+    // End the run once nobody can recover: every hero down, none with a life left
+    // to self-respawn (a downed hero with a life can still spend it; a standing one
+    // can revive). Solo simply means "your lives are your run."
+    this.checkWipe();
+  }
+
+  /**
+   * Flip to game-over when the party is wholly down with no lives left. isWipe
+   * gates on "everyone down"; the lives check is what keeps a solo hero (or a
+   * party with a life banked) from a premature loss — they can still self-respawn.
+   */
+  private checkWipe() {
+    if (this.state.phase !== "playing" || this.state.players.size === 0) return;
+    const downed: boolean[] = [];
+    let anyLifeLeft = false;
+    this.state.players.forEach((p) => {
+      downed.push(p.downed);
+      if (p.respawnsLeft > 0) anyLifeLeft = true;
+    });
+    if (isWipe(downed) && !anyLifeLeft) {
+      this.state.phase = "gameover";
+      this.broadcast("gameover", { floor: this.state.depth });
+    }
   }
 
   private respawn(player: Player, c: Combat) {
@@ -551,6 +687,8 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     player.x = spawn.x;
     player.y = spawn.y;
     player.hp = player.maxHp;
+    player.downed = false;
+    player.respawnIn = 0;
     // Buffs lapse on death; the carried heal potion is kept.
     player.attackBuff = 0;
     player.defenseBuff = 0;
@@ -558,7 +696,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     c.attackMult = 1;
     c.defenseReduce = 0;
     c.knockback = 0;
-    c.respawnAt = 0;
+    c.respawnReadyAt = 0;
   }
 
   /** True if a box of half-size r centered at (x, y) overlaps a wall or prop tile. */

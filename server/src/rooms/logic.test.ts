@@ -19,6 +19,8 @@ import {
   spawnInterval,
   scaleMobHp,
   scaleMobDamage,
+  respawnDelay,
+  isWipe,
   type LootTarget,
   type LootBuffs,
 } from "./logic";
@@ -27,6 +29,7 @@ import {
   MOB_DAMAGE,
   BUFF_DURATION,
   MAX_HEAL_CHARGES,
+  RESPAWN_DELAYS,
   rarityByName,
   weaponByName,
 } from "./tuning";
@@ -304,5 +307,41 @@ describe("pickAggroTarget", () => {
 
   it("returns null for no candidates", () => {
     expect(pickAggroTarget(0, 0, [], 96)).toBeNull();
+  });
+});
+
+describe("respawnDelay", () => {
+  it("ramps with each self-respawn, clamping past the table's end", () => {
+    expect(respawnDelay(0)).toBe(RESPAWN_DELAYS[0]); // first death
+    expect(respawnDelay(2)).toBe(RESPAWN_DELAYS[2]);
+    // Beyond the table the longest delay holds.
+    expect(respawnDelay(RESPAWN_DELAYS.length)).toBe(RESPAWN_DELAYS[RESPAWN_DELAYS.length - 1]);
+    expect(respawnDelay(999)).toBe(RESPAWN_DELAYS[RESPAWN_DELAYS.length - 1]);
+  });
+
+  it("never decreases (monotonic ramp)", () => {
+    for (let i = 1; i < RESPAWN_DELAYS.length; i++) {
+      expect(respawnDelay(i)).toBeGreaterThanOrEqual(respawnDelay(i - 1));
+    }
+  });
+
+  it("clamps a negative respawn count to the first delay", () => {
+    expect(respawnDelay(-3)).toBe(RESPAWN_DELAYS[0]);
+  });
+});
+
+describe("isWipe", () => {
+  it("is true only when a non-empty party is wholly down", () => {
+    expect(isWipe([true, true])).toBe(true);
+    expect(isWipe([true])).toBe(true);
+  });
+
+  it("is false when anyone is still up", () => {
+    expect(isWipe([true, false])).toBe(false);
+    expect(isWipe([false])).toBe(false);
+  });
+
+  it("is false for an empty room", () => {
+    expect(isWipe([])).toBe(false);
   });
 });

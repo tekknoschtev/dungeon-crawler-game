@@ -133,6 +133,9 @@ const WEAPON_FRAMES: Record<string, number> = {
   warhammer: 117,
 };
 const HEAL_COOLDOWN_MS = 250; // light throttle on the heal action
+// Mirrors the server's REVIVE_RANGE (tuning.ts) — used only to surface the
+// contextual "revive" hint; the server is authoritative on the actual revive.
+const REVIVE_RANGE = 18; // px
 
 /** Shapes decoded on the client (mirror the server schema). */
 interface PlayerView {
@@ -147,6 +150,9 @@ interface PlayerView {
   attackBuff: number; // seconds remaining (> 0 = active)
   defenseBuff: number;
   weapon: string; // equipped weapon name backing the attack buff (HUD icon); "" when none
+  downed: boolean; // hp<=0, awaiting self-respawn or a revive (rendered greyed/prone)
+  respawnsLeft: number; // lives remaining (0 = revive-only)
+  respawnIn: number; // seconds until the self-respawn button unlocks (0 = ready / N/A)
 }
 
 interface MobView {
@@ -192,6 +198,8 @@ interface Entity {
   maxHp: number;
   atkBuff: number; // seconds remaining (drives the aura)
   defBuff: number;
+  color: number; // the hero's tint, restored when they're revived
+  downed: boolean; // greyed/prone while awaiting respawn or revive
 }
 
 interface MobEntity {
@@ -256,6 +264,7 @@ export class GameScene extends Phaser.Scene {
   private attackRequested = false; // set by the touch attack button (UIScene)
   private lastHealAt = 0; // client-side heal throttle (ms)
   private healRequested = false; // set by the touch heal button (UIScene)
+  private localHealCharges = 0; // mirror of the local hero's heal stack (revive-hint gate)
 
   constructor() {
     super("game");
@@ -313,6 +322,15 @@ export class GameScene extends Phaser.Scene {
       this.game.events.off("useHeal", this.onHealRequest, this);
     });
 
+    // Run-stakes buttons (plain DOM, outside the canvas). The server validates
+    // both — respawn only fires when down + unlocked, restart only at game-over.
+    document
+      .getElementById("respawn-btn")
+      ?.addEventListener("click", () => this.room?.send("respawn"));
+    document
+      .getElementById("restart-btn")
+      ?.addEventListener("click", () => this.room?.send("restart"));
+
     this.setupRoom();
   }
 
@@ -348,6 +366,12 @@ export class GameScene extends Phaser.Scene {
       this.cameras.main.fadeOut(250, 0, 0, 0);
     });
 
+    // The party wiped — show the (placeholder) game-over screen with the floor
+    // reached. The Restart button (wired in create) sends "restart".
+    this.room.onMessage<{ floor: number }>("gameover", ({ floor }) => {
+      this.setGameOverOverlay(true, floor);
+    });
+
     this.localId = this.room.sessionId;
     const $ = getStateCallbacks(this.room);
     const state = this.room.state as {
@@ -355,6 +379,7 @@ export class GameScene extends Phaser.Scene {
       mobs: Map<string, MobView>;
       loot: Map<string, LootView>;
       markers: Map<string, MarkerView>;
+      phase: string;
     };
 
     // onAdd fires synchronously for players already in the room (including us)
@@ -370,19 +395,22 @@ export class GameScene extends Phaser.Scene {
       $(player).onChange(() => {
         const e = this.entities.get(sessionId);
         if (e) {
-          // Alive -> dead transition: announce every hero's death in the feed,
-          // including our own (which also still shows the center overlay below).
-          if (e.hp > 0 && player.hp <= 0) this.showToast(player.name, "death");
+          // Standing -> down transition: announce the fall in the feed (our own
+          // fall also raises the center overlay below).
+          if (!e.downed && player.downed) this.showToast(player.name, "death");
+          const downedChanged = e.downed !== player.downed;
           e.target.x = player.x;
           e.target.y = player.y;
           e.hp = player.hp;
           e.maxHp = player.maxHp;
           e.atkBuff = player.attackBuff;
           e.defBuff = player.defenseBuff;
+          e.downed = player.downed;
+          if (downedChanged) this.applyDownedLook(e);
         }
         if (isLocal) {
           this.updateHud(player);
-          this.setDeathOverlay(player.hp <= 0);
+          this.updateDownedOverlay(player);
         }
       });
     });
@@ -428,6 +456,12 @@ export class GameScene extends Phaser.Scene {
     // the party's history; the server caps the count and culls oldest-first.
     $(state).markers.onAdd((m: MarkerView, id: string) => this.addMarker(m, id));
     $(state).markers.onRemove((_m: MarkerView, id: string) => this.removeMarker(id));
+
+    // Phase drives the game-over overlay. The "gameover" message raises it (with
+    // the floor reached); this just clears it when a restart returns to "playing".
+    $(state).listen("phase", (phase: string) => {
+      if (phase === "playing") this.setGameOverOverlay(false);
+    });
 
     this.room.onError((code, message) => {
       console.error("Room error:", code, message);
@@ -480,7 +514,10 @@ export class GameScene extends Phaser.Scene {
       maxHp: player.maxHp,
       atkBuff: player.attackBuff,
       defBuff: player.defenseBuff,
+      color: colorNum,
+      downed: player.downed,
     });
+    this.applyDownedLook(this.entities.get(sessionId)!);
 
     // The camera follows the local hero through the world.
     if (isLocal) {
@@ -703,11 +740,23 @@ export class GameScene extends Phaser.Scene {
     if (fill) fill.style.width = `${Math.max(0, Math.min(100, (p.hp / p.maxHp) * 100))}%`;
 
     // Carried heals: a heart with the stack count, greyed when empty.
+    this.localHealCharges = p.healCharges;
     const heal = document.getElementById("hud-heal");
     const healN = document.getElementById("hud-heal-n");
     if (heal) heal.classList.toggle("empty", p.healCharges <= 0);
     if (heal) heal.title = p.healCharges > 0 ? `${p.healCharges} heal(s) — press Q` : "no heals";
     if (healN) healN.textContent = String(p.healCharges);
+
+    // Lives: ♥×N near the run HUD; greyed at 0 (revive-only).
+    const lives = document.getElementById("run-lives");
+    if (lives) {
+      lives.textContent = `♥×${p.respawnsLeft}`;
+      lives.classList.toggle("empty", p.respawnsLeft <= 0);
+      lives.title =
+        p.respawnsLeft > 0
+          ? `${p.respawnsLeft} life/lives — each self-respawn spends one`
+          : "no lives — revive-only";
+    }
 
     this.setBuffChip("hud-atk", p.attackBuff, p.weapon);
     this.setBuffChip("hud-def", p.defenseBuff);
@@ -778,11 +827,89 @@ export class GameScene extends Phaser.Scene {
     }, 2600);
   }
 
-  private setDeathOverlay(dead: boolean) {
-    if (dead) {
-      this.statusText.setText("You died…\nrespawning").setAlign("center").setVisible(true);
+  /** Grey + prone a downed hero so teammates can spot them; restore on revive. */
+  private applyDownedLook(e: Entity) {
+    if (e.downed) {
+      e.sprite.setTint(0x6a6f7a).setAlpha(0.55).setAngle(90);
+      e.aura.setVisible(false);
     } else {
-      this.statusText.setVisible(false);
+      e.sprite.setTint(e.color).setAlpha(1).setAngle(0);
+    }
+  }
+
+  /**
+   * The local "You're down" overlay: a countdown while the self-respawn cooldown
+   * runs, then the Respawn button (lives left), or a "wait for a revive" prompt
+   * (revive-only). Hidden when up. Driven by the per-tick respawnIn change.
+   */
+  private updateDownedOverlay(p: PlayerView) {
+    const el = document.getElementById("downed");
+    const sub = document.getElementById("downed-sub");
+    const btn = document.getElementById("respawn-btn");
+    if (!el || !sub || !btn) return;
+    const phase = (this.room?.state as { phase?: string } | undefined)?.phase;
+    if (!p.downed || phase === "gameover") {
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+    if (p.respawnsLeft <= 0) {
+      sub.textContent = "No lives left — wait for a teammate to revive you.";
+      btn.hidden = true;
+    } else if (p.respawnIn > 0) {
+      sub.textContent = `Respawn in ${Math.ceil(p.respawnIn)}s — or wait for a free revive.`;
+      btn.hidden = true;
+    } else {
+      const n = p.respawnsLeft;
+      sub.textContent = `${n} ${n === 1 ? "life" : "lives"} left — or wait for a free revive.`;
+      btn.hidden = false;
+    }
+  }
+
+  /** Show/hide the placeholder game-over overlay (with the floor reached). */
+  private setGameOverOverlay(show: boolean, floor?: number) {
+    const el = document.getElementById("gameover");
+    if (!el) return;
+    if (show) {
+      const sub = document.getElementById("gameover-sub");
+      if (sub && floor !== undefined) sub.textContent = `Reached Floor ${floor}`;
+      // The party is wiped — the per-player downed overlay gives way to this.
+      const downed = document.getElementById("downed");
+      if (downed) downed.hidden = true;
+      el.hidden = false;
+    } else {
+      el.hidden = true;
+    }
+  }
+
+  /**
+   * Contextual revive prompt: shown while a living, potion-carrying local hero is
+   * standing over a downed ally. The heal action (Q) then revives instead of
+   * self-healing — the server decides; this is only the nudge.
+   */
+  private updateReviveHint() {
+    const hint = document.getElementById("revive-hint");
+    if (!hint) return;
+    const me = this.entities.get(this.localId);
+    if (!me || me.downed || this.localHealCharges <= 0) {
+      hint.hidden = true;
+      return;
+    }
+    let nearest: Entity | undefined;
+    let best = REVIVE_RANGE;
+    this.entities.forEach((e, id) => {
+      if (id === this.localId || !e.downed) return;
+      const d = Phaser.Math.Distance.Between(me.sprite.x, me.sprite.y, e.sprite.x, e.sprite.y);
+      if (d <= best) {
+        best = d;
+        nearest = e;
+      }
+    });
+    if (nearest) {
+      hint.textContent = `❤ Revive ${nearest.label.text} — press Q`;
+      hint.hidden = false;
+    } else {
+      hint.hidden = true;
     }
   }
 
@@ -1035,6 +1162,7 @@ export class GameScene extends Phaser.Scene {
 
     this.updateRunHud();
     this.updateExitNudge();
+    this.updateReviveHint();
   }
 
   private sendInput() {

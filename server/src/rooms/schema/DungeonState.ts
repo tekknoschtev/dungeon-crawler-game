@@ -26,6 +26,16 @@ export class Player extends Schema {
   // Name of the weapon backing the active attack buff (see WEAPONS in tuning.ts),
   // so the HUD can show the actual weapon's icon. "" while unarmed.
   @type("string") weapon: string = "";
+  // --- Run stakes (M2) ---
+  // hp<=0 and awaiting self-respawn or a teammate's revive. The client renders a
+  // downed hero greyed/prone and shows the local "You're down" overlay.
+  @type("boolean") downed: boolean = false;
+  // Lives remaining this run (HUD "♥×N"). 0 = revive-only (no self-respawn button).
+  // Start below the cap; +1 each descent (see DungeonRoom).
+  @type("uint8") respawnsLeft: number = 0;
+  // Seconds until the self-respawn button unlocks; only nonzero while downed with
+  // lives left (same per-tick countdown pattern as attackBuff). 0 = ready / N/A.
+  @type("number") respawnIn: number = 0;
 }
 
 /** A server-driven enemy. Position is simulated and synced every tick. */
@@ -79,6 +89,9 @@ export class DungeonState extends Schema {
   // Per-floor pressure ramp surfaced to the HUD, 0 (just arrived) → 1 (max heat).
   // Derived each tick from time-on-floor; resets to 0 on descend.
   @type("number") heat: number = 0;
+  // Run phase: "playing" | "gameover". Flips to "gameover" on a party wipe with no
+  // lives left (drives the game-over overlay); "restart" rolls a fresh run.
+  @type("string") phase: string = "playing";
   @type({ map: Player }) players = new MapSchema<Player>();
   @type({ map: Mob }) mobs = new MapSchema<Mob>();
   @type({ map: Loot }) loot = new MapSchema<Loot>();

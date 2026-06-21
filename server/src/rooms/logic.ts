@@ -30,6 +30,7 @@ import {
   DEPTH_PRESSURE_BONUS,
   DEPTH_HP_SCALE,
   DEPTH_DAMAGE_SCALE,
+  RESPAWN_DELAYS,
   type Rarity,
   type Weapon,
 } from "./tuning";
@@ -251,6 +252,33 @@ export function regenHp(
 ): number {
   if (hp >= maxHp) return hp;
   return Math.min(maxHp, hp + ratePerSec * dt);
+}
+
+// --- Run stakes (downed / respawn / wipe) ------------------------------
+
+/**
+ * Seconds a downed hero waits before the self-respawn button unlocks, ramping by
+ * how many times they've already self-respawned this run (`respawnsUsed`, 0 for
+ * the first death). Indexes `delays`, clamping past its end so the longest delay
+ * holds. Pure so the ramp can be asserted monotonic in tests.
+ */
+export function respawnDelay(
+  respawnsUsed: number,
+  delays: readonly number[] = RESPAWN_DELAYS
+): number {
+  if (delays.length === 0) return 0;
+  const i = Math.min(Math.max(0, Math.floor(respawnsUsed)), delays.length - 1);
+  return delays[i];
+}
+
+/**
+ * True iff the party is wholly down — a non-empty room where every player is
+ * downed. The room layers a lives check on top (a downed hero with a life can
+ * still self-respawn), so this alone is not the game-over trigger; it's the
+ * "nobody's standing" building block. Empty room ≠ wipe; one hero up ≠ wipe.
+ */
+export function isWipe(downedFlags: readonly boolean[]): boolean {
+  return downedFlags.length > 0 && downedFlags.every(Boolean);
 }
 
 // --- Mob AI ------------------------------------------------------------
