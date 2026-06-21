@@ -136,6 +136,18 @@ const HEAL_COOLDOWN_MS = 250; // light throttle on the heal action
 // Mirrors the server's REVIVE_RANGE (tuning.ts) — used only to surface the
 // contextual "revive" hint; the server is authoritative on the actual revive.
 const REVIVE_RANGE = 18; // px
+
+// --- Vault chest (M4) --------------------------------------------------
+const FRAME_CHEST = 89; // Tiny Dungeon closed chest (gold-trimmed)
+// Door open sequence (Tiny Dungeon): closed → ajar → open, played on unlock.
+const FRAME_DOOR_CLOSED = 45;
+const FRAME_DOOR_HALF = 33;
+const FRAME_DOOR_OPEN = 21;
+const CHEST_DEPTH = 5; // chest sits at loot level
+const DOOR_DEPTH = 6; // gate just above the chest
+const CHEST_GLOW_DEPTH = 4;
+const CHEST_COLOR = 0xffd65c; // gold — the chest glow, beacon, and nudge arrow
+const CHEST_LOCKED_TINT = 0x70707a; // dimmed while sealed; clears on unlock
 // Mirrors the server's SCORE_MULT_MAX (tuning.ts) — drives the displayed score
 // multiplier (×1 calm → ×max at full heat); the server owns the actual scoring.
 const SCORE_MULT_MAX = 3;
@@ -157,6 +169,7 @@ interface PlayerView {
   respawnsLeft: number; // lives remaining (0 = revive-only)
   respawnIn: number; // seconds until the self-respawn button unlocks (0 = ready / N/A)
   score: number; // live run score (banked floors + current floor's un-banked gain)
+  relics: string[]; // procedurally-named vault trophies (score-screen flavor)
 }
 
 interface MobView {
@@ -180,6 +193,17 @@ interface MarkerView {
   x: number;
   y: number;
   color: string; // the fallen hero's color
+}
+
+interface ChestView {
+  x: number;
+  y: number;
+  doorX: number; // sealing door TILE coords, or (-1,-1) for the magic-seal fallback
+  doorY: number;
+  locked: boolean;
+  unlockIn: number; // seconds until the door opens (drives the countdown)
+  hp: number;
+  maxHp: number;
 }
 
 interface MapMessage {
@@ -221,6 +245,21 @@ interface LootEntity {
   glow: Phaser.GameObjects.Arc;
 }
 
+interface ChestEntity {
+  sprite: Phaser.GameObjects.Image; // the chest
+  glow: Phaser.GameObjects.Arc; // gold beacon under it (also the on-screen findability)
+  door?: Phaser.GameObjects.Image; // closed gate while locked (real-door case)
+  seal?: Phaser.GameObjects.Arc; // shimmer ring for the magic-seal fallback (no door)
+  countdown: Phaser.GameObjects.Text; // "0:43" while locked
+  hpBar: Phaser.GameObjects.Graphics; // break progress once unlocked
+  worldX: number; // chest world position (for the off-screen nudge arrow)
+  worldY: number;
+  locked: boolean;
+  unlockIn: number;
+  hp: number;
+  maxHp: number;
+}
+
 interface InputState {
   up: boolean;
   down: boolean;
@@ -233,6 +272,7 @@ export class GameScene extends Phaser.Scene {
   private entities = new Map<string, Entity>();
   private mobs = new Map<string, MobEntity>();
   private loot = new Map<string, LootEntity>();
+  private chests = new Map<string, ChestEntity>(); // per-floor vault (one entry)
   private markers = new Map<string, Phaser.GameObjects.Image>(); // server-owned tombstones
   private localId = "";
 
@@ -244,6 +284,9 @@ export class GameScene extends Phaser.Scene {
   private exitY = 0;
   private exitMarker?: Phaser.GameObjects.Container;
   private edgeArrow?: Phaser.GameObjects.Triangle;
+  // Off-screen wayfinder to the vault (gold), with a countdown chip while sealed.
+  private chestArrow?: Phaser.GameObjects.Triangle;
+  private chestArrowLabel?: Phaser.GameObjects.Text;
   // Throttle the depth/heat HUD so we only touch the DOM when a value changes.
   private lastDepthShown = -1;
   private lastHeatShown = -1;
@@ -379,12 +422,18 @@ export class GameScene extends Phaser.Scene {
       this.setGameOverOverlay(true, floor);
     });
 
+    // A teammate (or you) cracked the vault — gold toast naming the relic.
+    this.room.onMessage<{ name: string; who: string }>("relic", ({ name, who }) => {
+      this.showRelicToast(who, name);
+    });
+
     this.localId = this.room.sessionId;
     const $ = getStateCallbacks(this.room);
     const state = this.room.state as {
       players: Map<string, PlayerView>;
       mobs: Map<string, MobView>;
       loot: Map<string, LootView>;
+      chests: Map<string, ChestView>;
       markers: Map<string, MarkerView>;
       phase: string;
     };
@@ -458,6 +507,14 @@ export class GameScene extends Phaser.Scene {
 
     $(state).loot.onAdd((l: LootView, id: string) => this.addLoot(l, id));
     $(state).loot.onRemove((_l: LootView, id: string) => this.removeLoot(id));
+
+    // The per-floor vault: one entry, re-armed each descent. onChange drives the
+    // unlock countdown, the locked→open door reveal, and the break HP bar.
+    $(state).chests.onAdd((ch: ChestView, id: string) => {
+      this.addChest(ch, id);
+      $(ch).onChange(() => this.updateChest(ch, id));
+    });
+    $(state).chests.onRemove((_ch: ChestView, id: string) => this.removeChest(id));
 
     // Death markers fire onAdd for ones laid before we joined, so late-joiners see
     // the party's history; the server caps the count and culls oldest-first.
@@ -606,6 +663,196 @@ export class GameScene extends Phaser.Scene {
       },
     });
     this.loot.delete(id);
+  }
+
+  // --- Vault chest rendering ---------------------------------------------
+
+  /**
+   * Render the vault: a gold-glowing chest, sealed (while locked) behind either a
+   * closed gate at its door tile or — when there's no real door — a shimmer ring,
+   * with an unlock countdown floating above it. onChange (updateChest) handles the
+   * unlock reveal and the break HP bar; onRemove plays the open burst.
+   */
+  private addChest(ch: ChestView, id: string) {
+    const glow = this.add
+      .circle(ch.x, ch.y, TILE * 0.7, CHEST_COLOR, ch.locked ? 0.18 : 0.32)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(CHEST_GLOW_DEPTH);
+    this.tweens.add({
+      targets: glow,
+      scale: 1.25,
+      alpha: ch.locked ? 0.1 : 0.18,
+      duration: 900,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.inOut",
+    });
+
+    const sprite = this.add
+      .image(ch.x, ch.y, TILES_KEY, FRAME_CHEST)
+      .setDisplaySize(TILE, TILE)
+      .setDepth(CHEST_DEPTH);
+    if (ch.locked) sprite.setTint(CHEST_LOCKED_TINT);
+
+    let door: Phaser.GameObjects.Image | undefined;
+    let seal: Phaser.GameObjects.Arc | undefined;
+    if (ch.locked) {
+      if (ch.doorX >= 0 && ch.doorY >= 0) {
+        door = this.add
+          .image(ch.doorX * TILE + TILE / 2, ch.doorY * TILE + TILE / 2, TILES_KEY, FRAME_DOOR_CLOSED)
+          .setDisplaySize(TILE, TILE)
+          .setDepth(DOOR_DEPTH);
+      } else {
+        // Magic-seal fallback: a pulsing ring stands in for the absent gate.
+        seal = this.add
+          .circle(ch.x, ch.y, TILE * 0.6, CHEST_COLOR, 0)
+          .setStrokeStyle(2, CHEST_COLOR, 0.8)
+          .setDepth(DOOR_DEPTH);
+        this.tweens.add({
+          targets: seal,
+          scale: 1.3,
+          alpha: { from: 0.9, to: 0.2 },
+          duration: 1100,
+          yoyo: true,
+          repeat: -1,
+          ease: "Sine.inOut",
+        });
+      }
+    }
+
+    const countdown = this.add
+      .text(ch.x, ch.y - TILE, "", {
+        fontFamily: "monospace",
+        fontSize: "11px",
+        color: "#ffe9a8",
+      })
+      .setOrigin(0.5, 1)
+      .setScale(1 / CAMERA_ZOOM)
+      .setDepth(20)
+      .setVisible(ch.locked);
+
+    const hpBar = this.add.graphics().setDepth(CHEST_DEPTH + 1);
+
+    const e: ChestEntity = {
+      sprite,
+      glow,
+      door,
+      seal,
+      countdown,
+      hpBar,
+      worldX: ch.x,
+      worldY: ch.y,
+      locked: ch.locked,
+      unlockIn: ch.unlockIn,
+      hp: ch.hp,
+      maxHp: ch.maxHp,
+    };
+    this.chests.set(id, e);
+    this.refreshChestCountdown(e);
+  }
+
+  /** React to a synced chest change: the unlock reveal, the countdown, the HP bar. */
+  private updateChest(ch: ChestView, id: string) {
+    const e = this.chests.get(id);
+    if (!e) return;
+
+    if (e.locked && !ch.locked) this.openDoorReveal(e); // sealed → open
+    if (ch.hp < e.hp && !ch.locked) this.chestStrike(e); // took a hit
+
+    e.locked = ch.locked;
+    e.unlockIn = ch.unlockIn;
+    e.hp = ch.hp;
+    e.maxHp = ch.maxHp;
+
+    e.countdown.setVisible(ch.locked);
+    this.refreshChestCountdown(e);
+    // HP bar only once unlocked + chipped (hidden full/sealed, like other bars).
+    this.drawHpBar(e.hpBar, e.sprite.x, e.sprite.y, ch.locked ? e.maxHp : ch.hp, e.maxHp);
+  }
+
+  /** Rewrite the "m:ss" unlock countdown above a sealed chest. */
+  private refreshChestCountdown(e: ChestEntity) {
+    if (!e.locked) return;
+    const s = Math.max(0, Math.ceil(e.unlockIn));
+    e.countdown.setText(`${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`);
+  }
+
+  /**
+   * Play the door's 3-frame open sequence (closed → ajar → open), then clear the
+   * gate (or shimmer) and brighten the chest — the "come and get it" cue. The
+   * tile is already passable server-side by now.
+   */
+  private openDoorReveal(e: ChestEntity) {
+    e.sprite.clearTint(); // chest brightens
+    this.tweens.add({ targets: e.glow, alpha: 0.32, duration: 200 });
+    if (e.seal) {
+      this.tweens.killTweensOf(e.seal);
+      const seal = e.seal;
+      this.tweens.add({
+        targets: seal,
+        scale: 1.8,
+        alpha: 0,
+        duration: 260,
+        onComplete: () => seal.destroy(),
+      });
+      e.seal = undefined;
+    }
+    const door = e.door;
+    if (door) {
+      this.time.delayedCall(80, () => door.setFrame(FRAME_DOOR_HALF));
+      this.time.delayedCall(200, () => door.setFrame(FRAME_DOOR_OPEN));
+      this.time.delayedCall(360, () => {
+        this.tweens.add({
+          targets: door,
+          alpha: 0,
+          duration: 220,
+          onComplete: () => door.destroy(),
+        });
+      });
+      e.door = undefined;
+    }
+  }
+
+  /** Quick shake + flash when the chest takes a swing (mirrors mobStrike). */
+  private chestStrike(e: ChestEntity) {
+    const s = e.sprite;
+    this.tweens.killTweensOf(s);
+    const baseScale = s.scaleX;
+    s.setTint(0xffe9a8);
+    this.tweens.add({
+      targets: s,
+      scaleX: baseScale * 1.18,
+      scaleY: baseScale * 1.18,
+      duration: 70,
+      yoyo: true,
+      ease: "Quad.easeOut",
+      onComplete: () => s.setScale(baseScale).clearTint(),
+    });
+  }
+
+  /** Open burst when the vault is cracked (state onRemove), then free everything. */
+  private removeChest(id: string) {
+    const e = this.chests.get(id);
+    if (!e) return;
+    this.chests.delete(id);
+    this.tweens.killTweensOf(e.sprite);
+    this.tweens.killTweensOf(e.glow);
+    e.countdown.destroy();
+    e.hpBar.destroy();
+    e.door?.destroy();
+    e.seal?.destroy();
+    // A gold flare + pop, then clean up the chest + glow.
+    this.tweens.add({
+      targets: [e.sprite, e.glow],
+      scale: 2,
+      alpha: 0,
+      duration: 280,
+      ease: "Quad.easeOut",
+      onComplete: () => {
+        e.sprite.destroy();
+        e.glow.destroy();
+      },
+    });
   }
 
   /**
@@ -834,6 +1081,38 @@ export class GameScene extends Phaser.Scene {
     }, 2600);
   }
 
+  /**
+   * Gold toast when a hero unseals a vault relic ("✦ {who} unsealed the {name}").
+   * Both the player name and the relic name go in via textContent — names are
+   * user-supplied / server-built; keep them out of the HTML parser.
+   */
+  private showRelicToast(who: string, name: string) {
+    const container = document.getElementById("toasts");
+    if (!container) return;
+
+    const el = document.createElement("div");
+    el.className = "toast relic";
+    const whoEl = document.createElement("span");
+    whoEl.className = "who";
+    whoEl.textContent = who;
+    const nameEl = document.createElement("span");
+    nameEl.className = "relic-name";
+    nameEl.textContent = name;
+    el.append(
+      document.createTextNode("✦ "),
+      whoEl,
+      document.createTextNode(" unsealed the "),
+      nameEl
+    );
+    container.appendChild(el);
+
+    requestAnimationFrame(() => el.classList.add("show"));
+    window.setTimeout(() => {
+      el.classList.remove("show");
+      el.addEventListener("transitionend", () => el.remove(), { once: true });
+    }, 3200);
+  }
+
   /** Grey + prone a downed hero so teammates can spot them; restore on revive. */
   private applyDownedLook(e: Entity) {
     if (e.downed) {
@@ -901,7 +1180,12 @@ export class GameScene extends Phaser.Scene {
     const players = (this.room?.state as { players?: Map<string, PlayerView> } | undefined)?.players;
     if (!list || !players) return;
     const rows = Array.from(players.entries())
-      .map(([id, p]) => ({ id, name: p.name, score: p.score ?? 0 }))
+      .map(([id, p]) => ({
+        id,
+        name: p.name,
+        score: p.score ?? 0,
+        relics: Array.from(p.relics ?? []),
+      }))
       .sort((a, b) => b.score - a.score);
     list.replaceChildren();
     let total = 0;
@@ -917,6 +1201,19 @@ export class GameScene extends Phaser.Scene {
       val.textContent = r.score.toLocaleString();
       row.append(name, val);
       list.appendChild(row);
+
+      // The hero's vault relics, listed small + dimmed beneath their row.
+      if (r.relics.length > 0) {
+        const relics = document.createElement("div");
+        relics.className = "score-relics";
+        for (const name of r.relics) {
+          const tag = document.createElement("span");
+          tag.className = "relic-tag";
+          tag.textContent = `✦ ${name}`; // server-built name — still textContent
+          relics.appendChild(tag);
+        }
+        list.appendChild(relics);
+      }
     }
     if (totalEl) totalEl.textContent = total.toLocaleString();
   }
@@ -1195,6 +1492,63 @@ export class GameScene extends Phaser.Scene {
     this.edgeArrow.setVisible(true).setPosition(px, py).setRotation(ang + Math.PI / 2);
   }
 
+  /**
+   * Point the player toward the vault while it's off-camera: a gold edge arrow
+   * (distinct from the exit's amber), with the unlock countdown beside it while
+   * the chest is still sealed. On-screen, the chest's own glow + floating
+   * countdown do the job, so the arrow hides.
+   */
+  private updateChestNudge() {
+    const me = this.entities.get(this.localId);
+    const chest = this.chests.values().next().value as ChestEntity | undefined;
+    if (!me || !chest) {
+      this.chestArrow?.setVisible(false);
+      this.chestArrowLabel?.setVisible(false);
+      return;
+    }
+
+    // Lazily create the gold arrow + its countdown chip (reused across floors).
+    if (!this.chestArrow) {
+      this.chestArrow = this.add
+        .triangle(0, 0, 0, -11, 9, 9, -9, 9, CHEST_COLOR, 0.95)
+        .setScrollFactor(0)
+        .setDepth(HUD_DEPTH)
+        .setVisible(false);
+      this.chestArrowLabel = this.add
+        .text(0, 0, "", { fontFamily: "monospace", fontSize: "11px", color: "#ffe9a8" })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(HUD_DEPTH)
+        .setVisible(false);
+    }
+
+    const cam = this.cameras.main;
+    const view = cam.worldView;
+    if (view.contains(chest.worldX, chest.worldY)) {
+      this.chestArrow.setVisible(false);
+      this.chestArrowLabel!.setVisible(false);
+      return;
+    }
+    const cx = cam.width / 2;
+    const cy = cam.height / 2;
+    const sx = ((chest.worldX - view.x) / view.width) * cam.width;
+    const sy = ((chest.worldY - view.y) / view.height) * cam.height;
+    const ang = Math.atan2(sy - cy, sx - cx);
+    const px = cx + Math.cos(ang) * (cx - 46);
+    const py = cy + Math.sin(ang) * (cy - 46);
+    this.chestArrow.setVisible(true).setPosition(px, py).setRotation(ang + Math.PI / 2);
+
+    if (chest.locked) {
+      const s = Math.max(0, Math.ceil(chest.unlockIn));
+      this.chestArrowLabel!.setText(`${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`)
+        .setVisible(true)
+        // Nudge the label toward screen-center from the arrow so it stays on-screen.
+        .setPosition(px - Math.cos(ang) * 16, py - Math.sin(ang) * 16);
+    } else {
+      this.chestArrowLabel!.setVisible(false);
+    }
+  }
+
   /** Add one map tile image to the map layer and return it. */
   private addCell(px: number, py: number, t: number, frame: number) {
     const cell = this.add
@@ -1243,6 +1597,7 @@ export class GameScene extends Phaser.Scene {
 
     this.updateRunHud();
     this.updateExitNudge();
+    this.updateChestNudge();
     this.updateReviveHint();
   }
 

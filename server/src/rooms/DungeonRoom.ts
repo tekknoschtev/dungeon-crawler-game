@@ -1,5 +1,5 @@
 import { Room, Client, matchMaker } from "colyseus";
-import { DungeonState, Player, Mob, Loot, DeathMarker } from "./schema/DungeonState";
+import { DungeonState, Player, Mob, Loot, DeathMarker, Chest } from "./schema/DungeonState";
 import { loadMap, LoadedMap, TILE } from "./map";
 import {
   PLAYER_SPEED,
@@ -24,6 +24,10 @@ import {
   EXIT_RADIUS,
   DESCEND_CHANNEL_TIME,
   DESCEND_FADE_MS,
+  CHEST_UNLOCK_TIME,
+  CHEST_HP,
+  CHEST_RADIUS,
+  CHEST_BUFF_DURATION,
 } from "./tuning";
 import {
   dist,
@@ -51,7 +55,10 @@ import {
   spawnInterval,
   scaleMobHp,
   scaleMobDamage,
+  chestPoints,
+  rollRelic,
   type AggroCandidate,
+  type Vec,
 } from "./logic";
 import {
   COLORS,
@@ -66,6 +73,10 @@ import {
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const CODE_LEN = 4;
 const CODE_RE = new RegExp(`^[${CODE_ALPHABET}]{${CODE_LEN}}$`);
+
+// The single vault chest per floor lives in the `chests` MapSchema under this
+// fixed id (one entry), reusing the map onAdd/onRemove render path on the client.
+const VAULT_ID = "vault";
 
 function randomCode(): string {
   let out = "";
@@ -147,6 +158,10 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   private floorStartAt = 0; // sim time the current floor began (drives the pressure ramp)
   private descendProgress = 0; // s a hero has held the exit toward the descend channel
   private descending = false; // true during the fade-out window before the floor swaps
+  // TILE coords of the current floor's vault chest, so mob/loot spawns stay off
+  // it. The door tile (when there is one) is sealed in `collision`, so it's
+  // excluded from spawns automatically; null between placements.
+  private vaultChestTile: Vec | null = null;
 
   async onCreate(options: { code?: string } = {}) {
     this.state = new DungeonState();
@@ -260,13 +275,16 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.collision = this.map.grid.map((row) => row.slice());
     for (const p of this.map.props) this.collision[p.y][p.x] = 1;
 
-    // Cache every walkable tile once (floor minus props), for mob/loot spawns.
-    this.floors = [];
-    for (let y = 0; y < this.map.height; y++) {
-      for (let x = 0; x < this.map.width; x++) {
-        if (this.collision[y][x] === 0) this.floors.push({ x, y });
-      }
-    }
+    // Arm a fresh vault: seals its door tile in `collision` (so the chamber is
+    // unreachable below) and records the chest tile to keep mobs/loot off it.
+    this.state.chests.clear();
+    this.placeVault(depth);
+
+    // Cache walkable tiles for mob/loot spawns: every floor tile reachable from a
+    // spawn (so the sealed vault chamber, behind the locked door, never spawns a
+    // trapped mob), minus the chest tile (covers the door-less magic-seal fallback,
+    // whose chest sits on an otherwise-reachable tile).
+    this.floors = this.reachableFloorTiles();
 
     // Fresh floor: drop the previous floor's mobs, loot, and death markers (whose
     // coords are meaningless on the new layout), and reset the ramp.
@@ -296,6 +314,161 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
 
     // Push the new geometry to everyone (no-op when no one's connected yet).
     this.broadcast("map", this.mapPayload());
+  }
+
+  // --- Vault chest (M4) --------------------------------------------------
+
+  /**
+   * Place this floor's vault: a sealed chest the party can see from arrival but
+   * can't crack until the floor's heat has built. Uses the generator's carved
+   * chamber (a real room behind a single door tile, sealed in `collision` while
+   * locked); when the layout couldn't fit a chamber, falls back to a magic-sealed
+   * open tile far from spawns/exit so the feature always appears. Records the
+   * chest tile so spawns stay off it. Sets `this.vaultChestTile`.
+   */
+  private placeVault(depth: number) {
+    const chest = new Chest();
+    chest.locked = true;
+    chest.unlockIn = CHEST_UNLOCK_TIME;
+    chest.hp = CHEST_HP;
+    chest.maxHp = CHEST_HP;
+
+    const v = this.map.vault;
+    if (v) {
+      chest.x = v.chest.x * TILE + TILE / 2;
+      chest.y = v.chest.y * TILE + TILE / 2;
+      chest.doorX = v.door.x;
+      chest.doorY = v.door.y;
+      this.collision[v.door.y][v.door.x] = 1; // seal the chamber while locked
+      this.vaultChestTile = v.chest;
+    } else {
+      // No chamber fit this layout: magic-seal an open floor tile (no door) far
+      // from spawns/exit. The chest is still impervious until unlock; the client
+      // shows a shimmer/lock instead of a gate.
+      const avoid: Vec[] = this.map.spawns.map((s) => ({
+        x: Math.floor(s.x / TILE),
+        y: Math.floor(s.y / TILE),
+      }));
+      avoid.push({ x: this.map.exit.x, y: this.map.exit.y });
+      const tile = this.farthestFloorTile(avoid);
+      chest.x = tile.x * TILE + TILE / 2;
+      chest.y = tile.y * TILE + TILE / 2;
+      chest.doorX = -1;
+      chest.doorY = -1;
+      this.vaultChestTile = tile;
+    }
+    this.state.chests.set(VAULT_ID, chest);
+  }
+
+  /**
+   * Flood-fill from the first spawn over `collision`, returning every reachable
+   * floor tile except the vault chest tile. The sealed vault chamber (behind the
+   * collision-blocked door) is unreachable, so it's naturally excluded — no mob
+   * or loot ever spawns trapped inside the vault.
+   */
+  private reachableFloorTiles(): { x: number; y: number }[] {
+    const w = this.map.width;
+    const h = this.map.height;
+    const seen = new Uint8Array(w * h);
+    const out: { x: number; y: number }[] = [];
+    const startSpawn = this.map.spawns[0];
+    const sx = startSpawn ? Math.floor(startSpawn.x / TILE) : 1;
+    const sy = startSpawn ? Math.floor(startSpawn.y / TILE) : 1;
+    const stack: number[] = [sx, sy];
+    const chest = this.vaultChestTile;
+    while (stack.length) {
+      const y = stack.pop()!;
+      const x = stack.pop()!;
+      if (x < 0 || y < 0 || x >= w || y >= h) continue;
+      if (this.collision[y][x] !== 0) continue;
+      const idx = y * w + x;
+      if (seen[idx]) continue;
+      seen[idx] = 1;
+      if (!chest || chest.x !== x || chest.y !== y) out.push({ x, y });
+      stack.push(x + 1, y, x - 1, y, x, y + 1, x, y - 1);
+    }
+    return out;
+  }
+
+  /** The open floor tile farthest (max nearest-distance) from the avoid points. */
+  private farthestFloorTile(avoid: Vec[]): Vec {
+    let best: Vec = { x: 1, y: 1 };
+    let bestScore = -1;
+    for (let y = 0; y < this.map.height; y++) {
+      for (let x = 0; x < this.map.width; x++) {
+        if (this.collision[y][x] !== 0) continue;
+        let score = Infinity;
+        for (const a of avoid) {
+          const d = (a.x - x) ** 2 + (a.y - y) ** 2;
+          if (d < score) score = d;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          best = { x, y };
+        }
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Tick the vault's unlock countdown while it's sealed; when it hits 0 the door
+   * opens — flip `locked` and clear the (real) door tile from `collision` so it's
+   * passable. The map walls were never changed, so no map re-send is needed.
+   */
+  private updateChest(dt: number) {
+    if (this.state.phase !== "playing") return;
+    const chest = this.state.chests.get(VAULT_ID);
+    if (!chest || !chest.locked) return;
+    chest.unlockIn = Math.max(0, chest.unlockIn - dt);
+    if (chest.unlockIn <= 0) {
+      chest.locked = false;
+      if (chest.doorX >= 0 && chest.doorY >= 0) {
+        this.collision[chest.doorY][chest.doorX] = 0; // gate opens → passable
+      }
+    }
+  }
+
+  /**
+   * Crack the vault open: the depth-scaled mega-points (riding the heat
+   * multiplier, un-banked like all floor score) go to the whole party split
+   * evenly; the heal + buff + relic go to the opener who braved it.
+   */
+  private openChest(openerId: string) {
+    const chest = this.state.chests.get(VAULT_ID);
+    if (!chest) return;
+
+    // Points → party, split evenly (the party total rises by ~the chest amount).
+    // Each share is rounded so scores stay whole on the HUD (the total can differ
+    // from `pts` by < n points — immaterial against a depth-scaled jackpot).
+    const pts = Math.round(chestPoints(this.state.depth) * scoreMultiplier(this.state.heat));
+    const n = this.state.players.size;
+    if (n > 0) {
+      const each = Math.round(pts / n);
+      this.state.players.forEach((p) => {
+        p.score += each;
+      });
+    }
+
+    // Heal + buff + relic → the opener.
+    const opener = this.state.players.get(openerId);
+    const oc = this.combat.get(openerId);
+    if (opener && oc) {
+      opener.hp = opener.maxHp; // full heal
+      // Reuse the loot machinery for a synthetic top-tier grant (strongest weapon
+      // + strongest defense), then stretch both timers to the vault's longer buff.
+      applyLootEffect(opener, oc, { rarity: "legendary", category: "attack", variant: "warhammer" });
+      applyLootEffect(opener, oc, { rarity: "legendary", category: "defense" });
+      opener.attackBuff = Math.max(opener.attackBuff, CHEST_BUFF_DURATION);
+      opener.defenseBuff = Math.max(opener.defenseBuff, CHEST_BUFF_DURATION);
+
+      const name = rollRelic(Math.random, this.state.depth);
+      opener.relics.push(name);
+      this.broadcast("relic", { name, who: opener.name });
+    }
+
+    this.state.chests.delete(VAULT_ID); // client onRemove plays the burst
+    this.vaultChestTile = null;
   }
 
   /** The map payload clients render (geometry + props + the descent exit). */
@@ -378,6 +551,19 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
         }
       }
     });
+
+    // The same swing chips the vault — but only once it's unlocked (the door's
+    // open) and the hero is in melee range. The breaking blow opens it.
+    const chest = this.state.chests.get(VAULT_ID);
+    if (
+      chest &&
+      !chest.locked &&
+      chest.hp > 0 &&
+      dist(chest.x, chest.y, player.x, player.y) <= PLAYER_ATTACK_RANGE + CHEST_RADIUS
+    ) {
+      chest.hp = Math.max(0, chest.hp - damage);
+      if (chest.hp <= 0) this.openChest(sessionId);
+    }
   }
 
   /**
@@ -453,6 +639,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       player.defenseBuff = 0;
       player.weapon = "";
       player.score = 0;
+      player.relics.clear(); // fresh run — relics otherwise persist across floors
       const c = this.combat.get(sessionId);
       if (c) {
         c.attackReadyAt = 0;
@@ -678,6 +865,9 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       this.spawnMob();
       this.nextMobSpawnAt = this.now + spawnInterval(heat);
     }
+
+    // Tick the vault's unlock countdown (opens its door when it lands).
+    this.updateChest(dt);
 
     // Let the party descend by holding the exit.
     this.updateDescent(dt);
