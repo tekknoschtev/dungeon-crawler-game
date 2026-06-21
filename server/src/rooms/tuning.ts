@@ -37,6 +37,9 @@ export const REVIVE_RANGE = 18; // px — how close a healer must be to revive a
 export const REVIVE_HP_PCT = 0.5; // fraction of max HP a revived ally comes back with
 
 // --- Mobs --------------------------------------------------------------
+// The slime baseline. These stay the canonical defaults (the slime entry in MOBS
+// mirrors them, so floor 1 feels exactly as before) and back the logic.ts param
+// defaults + their tests. Per-kind stats live in MOBS below.
 export const MOB_MAX_HP = 30;
 export const MOB_SPEED = 50; // px/s — slower than the player so mobs are kiteable
 export const MOB_RADIUS = 5;
@@ -44,6 +47,45 @@ export const MOB_DAMAGE = 8;
 export const MOB_ATTACK_COOLDOWN = 1.0; // s
 export const MOB_AGGRO_RANGE = 96; // px (~6 tiles)
 export const MOB_ATTACK_RANGE = 18; // px
+
+// Mob bestiary (M5). One row per kind; the spawn mix is a depth-gated weighted
+// roll (see rollMobKind) so deeper floors unlock tougher monsters while the early
+// floors stay a slime-and-rat warm-up. Per-kind stats let each read distinctly:
+// rats/bats are fast and fragile (skittering pressure), crabs/ghosts are slow
+// bruisers (they hit hard), imps/spiders are aggressive mid-tier. `hp`/`damage`
+// are the *base* values — depth still scales them on top (scaleMobHp/Damage).
+// `score` is the base kill value feeding M3's heat-multiplied scoring (tougher,
+// rarer, deeper kinds pay more). `minDepth` is the first floor a kind appears on;
+// `weight` is its spawn share among the kinds eligible on the current floor.
+//
+// `frame` is the Tiny Dungeon sheet index the *client* renders (mirrored by
+// MOB_FRAMES in GameScene.ts — keep the names in sync); the server never renders.
+export interface MobKind {
+  name: string; // synced to Mob.kind
+  frame: number; // Tiny Dungeon sheet index (client render hint)
+  hp: number; // base max HP (before depth scaling)
+  speed: number; // px/s chase speed (wander is half this)
+  damage: number; // base contact damage (before depth scaling)
+  aggro: number; // px — how far it notices a hero
+  score: number; // base kill points (before depth + heat multiplier)
+  minDepth: number; // earliest floor this kind can spawn on (1-based)
+  weight: number; // spawn weight among the kinds eligible this floor
+}
+
+// Keep "slime" first and "ghost" last: logic.test.ts pins rollMobKind's bottom
+// (floor 1) and top (deep floor) buckets to that order. The slime row matches the
+// MOB_* defaults above so floor 1 is unchanged from pre-M5.
+export const MOBS: MobKind[] = [
+  { name: "slime", frame: 108, hp: 30, speed: 50, damage: 8, aggro: 96, score: 10, minDepth: 1, weight: 40 },
+  { name: "rat", frame: 124, hp: 16, speed: 72, damage: 5, aggro: 84, score: 8, minDepth: 1, weight: 24 },
+  { name: "bat", frame: 120, hp: 18, speed: 80, damage: 6, aggro: 112, score: 12, minDepth: 2, weight: 18 },
+  { name: "crab", frame: 110, hp: 48, speed: 46, damage: 12, aggro: 100, score: 18, minDepth: 3, weight: 16 },
+  { name: "imp", frame: 109, hp: 30, speed: 64, damage: 14, aggro: 124, score: 24, minDepth: 4, weight: 12 },
+  { name: "spider", frame: 122, hp: 26, speed: 68, damage: 9, aggro: 128, score: 16, minDepth: 5, weight: 12 },
+  { name: "ghost", frame: 121, hp: 42, speed: 58, damage: 17, aggro: 140, score: 32, minDepth: 7, weight: 8 },
+];
+export const mobByName = (name: string): MobKind =>
+  MOBS.find((m) => m.name === name) ?? MOBS[0];
 
 // --- Pressure (the per-floor difficulty clock) -------------------------
 // Mob pressure ramps with TIME ON THE FLOOR, not by clearing it — a fresh floor
