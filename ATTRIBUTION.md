@@ -36,6 +36,17 @@ the local player is identified by their yellow name label rather than a drawn ri
   the gitignored `assets-src/tiny-dungeon/`).
 - Date added: 2026-06-16 (floor decoration + death markers: 2026-06-19)
 
+### Custom — descent ladder / hatch
+- Source URL: n/a (original art created for this project)
+- Author / creator: project author (Steve)
+- License: project-owned; pixel style hand-influenced by Kenney Tiny Dungeon (CC0)
+- License URL: https://creativecommons.org/publicdomain/zero/1.0/ (style reference)
+- Used for: the floor exit / descent marker, replacing the earlier composed-shape
+  placeholder. Shipped as `client/public/assets/custom/descent-ladder.png` (16×16);
+  rendered in `GameScene.buildExitMarker` (with a soft pulsing glow behind it).
+- Modifications: original; raw source kept under the gitignored `assets-src/custom-sprites/`.
+- Date added: 2026-06-20
+
 ## Planned sources (Milestone 2)
 
 The plan is to pull top-down dungeon art from **Kenney** (https://kenney.nl),

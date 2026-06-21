@@ -101,6 +101,7 @@ const FRAME_SLIME = 108; // Tiny Dungeon green slime
 const MOB_DEPTH = 8; // mobs render just under heroes (depth 10)
 const LOOT_DEPTH = 5;
 const EXIT_DEPTH = 4; // descent beacon: above the floor, below loot/mobs
+const EXIT_TEXTURE = "descent-ladder"; // custom 16×16 ladder/hatch sprite (client/public/assets/custom)
 const LOOT_GLOW_DEPTH = 4;
 const ATTACK_COOLDOWN_MS = 450; // client throttle; mirrors the server cooldown
 const SWING_RADIUS = 26; // world px of the local swing ring (feedback only)
@@ -265,6 +266,7 @@ export class GameScene extends Phaser.Scene {
       frameWidth: TILE_SRC,
       frameHeight: TILE_SRC,
     });
+    this.load.image(EXIT_TEXTURE, "/assets/custom/descent-ladder.png");
   }
 
   create() {
@@ -903,32 +905,15 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * The descent point: a trapdoor opening into a ladder shaft, composed from
-   * shapes (Tiny Dungeon has no stairs tile). Rebuilt per floor; a soft torch-lit
-   * glow pulses so it's findable without reading like a UI arrow.
+   * The descent point: a custom 16×16 ladder/hatch sprite (Tiny Dungeon has no
+   * stairs tile). Rebuilt per floor; a soft torch-lit glow pulses behind it so
+   * it's findable without reading like a UI arrow.
    */
   private buildExitMarker(t: number) {
     this.exitMarker?.destroy();
     const glow = this.add.circle(0, 0, t * 0.72, 0xffb24d, 0.14);
-    const g = this.add.graphics();
-    const r = t * 0.42;
-    const lw = Math.max(1, t * 0.07);
-    // Dark shaft opening with a wooden lip (the open trapdoor).
-    g.fillStyle(0x0d0b09, 1).fillRoundedRect(-r, -r, r * 2, r * 2, 3);
-    g.lineStyle(Math.max(1, t * 0.09), 0x6b4a2b, 1).strokeRoundedRect(-r, -r, r * 2, r * 2, 3);
-    // Ladder rails + rungs descending into the dark (lower rungs dimmer = depth).
-    const railX = t * 0.16;
-    g.lineStyle(lw, 0xc79a5b, 1);
-    g.lineBetween(-railX, -r * 0.7, -railX, r * 0.85);
-    g.lineBetween(railX, -r * 0.7, railX, r * 0.85);
-    for (const rung of [
-      { y: -r * 0.35, color: 0xd9b072 },
-      { y: r * 0.05, color: 0xb07a45 },
-      { y: r * 0.45, color: 0x7a5230 },
-    ]) {
-      g.lineStyle(lw, rung.color, 1).lineBetween(-railX, rung.y, railX, rung.y);
-    }
-    const cont = this.add.container(this.exitX, this.exitY, [glow, g]).setDepth(EXIT_DEPTH);
+    const ladder = this.add.image(0, 0, EXIT_TEXTURE).setDisplaySize(t, t);
+    const cont = this.add.container(this.exitX, this.exitY, [glow, ladder]).setDepth(EXIT_DEPTH);
     this.exitMarker = cont;
     this.tweens.add({
       targets: glow,
