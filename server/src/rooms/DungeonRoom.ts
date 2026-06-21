@@ -11,13 +11,10 @@ import {
   LIFE_CAP,
   REVIVE_RANGE,
   REVIVE_HP_PCT,
-  MOB_MAX_HP,
-  MOB_SPEED,
   MOB_RADIUS,
   MOB_ATTACK_COOLDOWN,
-  MOB_AGGRO_RANGE,
   MOB_ATTACK_RANGE,
-  MOB_DAMAGE,
+  mobByName,
   PICKUP_RANGE,
   HEAL_PCT,
   MAX_DEATH_MARKERS,
@@ -36,6 +33,7 @@ import {
   rollRarity,
   rollCategory,
   rollWeapon,
+  rollMobKind,
   applyLootEffect,
   applyKnockback,
   playerAttackDamage,
@@ -661,7 +659,10 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     // current floor's gain rides un-banked until they descend (see updateDescent).
     const killer = this.state.players.get(killerId);
     if (killer) {
-      killer.score += Math.round(killScore(this.state.depth) * scoreMultiplier(this.state.heat));
+      // Tougher/deeper kinds are worth more: the kind's base value feeds the
+      // depth + heat-multiplier scoring (see MOBS / killScore).
+      const base = mobByName(mob.kind).score;
+      killer.score += Math.round(killScore(this.state.depth, base) * scoreMultiplier(this.state.heat));
     }
     this.dropLoot(mob.x, mob.y);
     this.state.mobs.delete(id);
@@ -676,12 +677,14 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     const mob = new Mob();
     mob.x = tile.x * TILE + TILE / 2;
     mob.y = tile.y * TILE + TILE / 2;
-    // Deeper floors field tougher mobs (HP scales with depth; damage is scaled
-    // at hit time in updateMob).
-    const hp = scaleMobHp(MOB_MAX_HP, this.state.depth);
+    // Pick a kind from the depth-gated spawn mix (M5), then field it tougher the
+    // deeper we are: HP scales with depth here; its damage is scaled at hit time
+    // in updateMob. Speed/aggro/score come from the kind's row (see MOBS).
+    const kind = rollMobKind(this.state.depth);
+    mob.kind = kind.name;
+    const hp = scaleMobHp(kind.hp, this.state.depth);
     mob.hp = hp;
     mob.maxHp = hp;
-    mob.kind = "slime";
     const id = `m${this.mobSeq++}`;
     this.state.mobs.set(id, mob);
     this.mobAI.set(id, { attackReadyAt: 0, nextWanderAt: 0, wanderDx: 0, wanderDy: 0 });
@@ -690,10 +693,11 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   private updateMob(mob: Mob, id: string, dt: number, candidates: AggroCandidate[]) {
     const ai = this.mobAI.get(id);
     if (!ai) return;
+    const kind = mobByName(mob.kind); // per-kind aggro / damage (M5)
 
     // Aggro the nearest living player within range (candidates pre-filtered to
     // the living, built once per tick).
-    const aggro = pickAggroTarget(mob.x, mob.y, candidates, MOB_AGGRO_RANGE);
+    const aggro = pickAggroTarget(mob.x, mob.y, candidates, kind.aggro);
     const target = aggro ? this.state.players.get(aggro.id) : undefined;
     if (aggro && target) {
       if (aggro.dist <= MOB_ATTACK_RANGE) {
@@ -701,7 +705,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
           ai.attackReadyAt = this.now + MOB_ATTACK_COOLDOWN;
           mob.attackTick = (mob.attackTick + 1) % 256; // signal a strike to clients
           const tc = this.combat.get(aggro.id);
-          const base = scaleMobDamage(MOB_DAMAGE, this.state.depth);
+          const base = scaleMobDamage(kind.damage, this.state.depth);
           const dmg = mobDamageAfterDefense(target.defenseBuff > 0, tc ? tc.defenseReduce : 0, base);
           target.hp = Math.max(0, target.hp - dmg);
         }
@@ -731,7 +735,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   private moveMob(mob: Mob, dx: number, dy: number, dt: number, speedScale: number) {
     const dir = normalize(dx, dy);
     if (dir.x === 0 && dir.y === 0) return;
-    const speed = MOB_SPEED * speedScale * dt;
+    const speed = mobByName(mob.kind).speed * speedScale * dt;
     const nx = mob.x + dir.x * speed;
     const ny = mob.y + dir.y * speed;
     if (!this.collides(nx, mob.y, MOB_RADIUS)) mob.x = nx;

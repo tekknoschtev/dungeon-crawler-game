@@ -97,7 +97,19 @@ const LABEL_OFFSET = 10; // world px above the hero's center
 const HUD_DEPTH = 1000;
 
 // --- Combat + loot (M3 / M4) -------------------------------------------
-const FRAME_SLIME = 108; // Tiny Dungeon green slime
+const FRAME_SLIME = 108; // Tiny Dungeon green slime (fallback for unknown kinds)
+// Mob kind → Tiny Dungeon sheet frame (M5). Mirrors the server MOBS table in
+// tuning.ts — keep the names in sync. The server picks the kind (depth-gated
+// spawn mix); the client only renders the matching sprite for the synced kind.
+const MOB_FRAMES: Record<string, number> = {
+  slime: 108,
+  rat: 124,
+  bat: 120,
+  crab: 110,
+  imp: 109,
+  spider: 122,
+  ghost: 121,
+};
 const MOB_DEPTH = 8; // mobs render just under heroes (depth 10)
 const LOOT_DEPTH = 5;
 const EXIT_DEPTH = 4; // descent beacon: above the floor, below loot/mobs
@@ -595,8 +607,9 @@ export class GameScene extends Phaser.Scene {
   // --- Mobs + loot rendering ---------------------------------------------
 
   private addMob(mob: MobView, id: string) {
+    const frame = MOB_FRAMES[mob.kind] ?? FRAME_SLIME;
     const sprite = this.add
-      .image(mob.x, mob.y, TILES_KEY, FRAME_SLIME)
+      .image(mob.x, mob.y, TILES_KEY, frame)
       .setDisplaySize(TILE, TILE)
       .setDepth(MOB_DEPTH);
     const hpBar = this.add.graphics().setDepth(MOB_DEPTH + 1);

@@ -19,6 +19,7 @@ import {
   CATEGORY_TOTAL,
   WEAPONS,
   WEAPON_TOTAL,
+  MOBS,
   rarityByName,
   weaponByName,
   PRESSURE_RAMP_TIME,
@@ -45,6 +46,7 @@ import {
   RELIC_SUFFIX_MIN_TIER,
   type Rarity,
   type Weapon,
+  type MobKind,
 } from "./tuning";
 
 /** A function returning a float in [0, 1). Math.random by default; injectable in tests. */
@@ -115,6 +117,21 @@ export function rollCategory(rng: Rng = Math.random): string {
 /** Which weapon an "attack" drop is — rarer weapons hit harder/knock back. */
 export function rollWeapon(rng: Rng = Math.random): Weapon {
   return rollWeighted(WEAPONS, WEAPON_TOTAL, rng);
+}
+
+/**
+ * Pick which kind of mob to spawn on floor `depth` (M5): a weighted roll among
+ * only the kinds whose `minDepth` has been reached, so early floors stay a
+ * slime-and-rat warm-up and deeper floors fold in the tougher monsters. The
+ * eligible pool always contains the slime (minDepth 1), so it never rolls empty;
+ * the guard is belt-and-suspenders. The weight total is recomputed per call since
+ * the eligible set grows with depth.
+ */
+export function rollMobKind(depth: number, rng: Rng = Math.random): MobKind {
+  const eligible = MOBS.filter((m) => m.minDepth <= depth);
+  const pool = eligible.length > 0 ? eligible : [MOBS[0]];
+  const total = pool.reduce((sum, m) => sum + m.weight, 0);
+  return rollWeighted(pool, total, rng);
 }
 
 // --- Loot application --------------------------------------------------

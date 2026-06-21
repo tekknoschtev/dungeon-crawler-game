@@ -6,6 +6,7 @@ import {
   rollRarity,
   rollCategory,
   rollWeapon,
+  rollMobKind,
   applyLootEffect,
   applyKnockback,
   playerAttackDamage,
@@ -43,6 +44,7 @@ import {
   CHEST_BASE_POINTS,
   RELIC_ADJECTIVES,
   RELIC_NOUNS,
+  MOBS,
   rarityByName,
   weaponByName,
 } from "./tuning";
@@ -104,6 +106,37 @@ describe("loot rolls (deterministic RNG)", () => {
   it("rollWeapon hits the bottom and top of the weight table", () => {
     expect(rollWeapon(() => 0).name).toBe("shortsword"); // first bucket
     expect(rollWeapon(() => 0.999).name).toBe("warhammer"); // last bucket
+  });
+});
+
+describe("rollMobKind (M5 depth-gated spawn mix)", () => {
+  it("floor 1 only fields the kinds unlocked at depth 1", () => {
+    // slime + rat are the only minDepth<=1 kinds; the roll spans just those.
+    expect(rollMobKind(1, () => 0).name).toBe("slime"); // first eligible bucket
+    expect(rollMobKind(1, () => 0.999).name).toBe("rat"); // last eligible at depth 1
+  });
+
+  it("never rolls a kind below its minDepth, at any depth", () => {
+    for (const depth of [1, 2, 3, 5, 7, 20]) {
+      for (let r = 0; r < 1; r += 0.05) {
+        const kind = rollMobKind(depth, () => r);
+        expect(kind.minDepth).toBeLessThanOrEqual(depth);
+      }
+    }
+  });
+
+  it("deep floors fold in the tougher kinds, up to the last in the table", () => {
+    // By the deepest minDepth every kind is eligible, so the top bucket is ghost.
+    const maxMinDepth = Math.max(...MOBS.map((m) => m.minDepth));
+    expect(rollMobKind(maxMinDepth, () => 0.999).name).toBe("ghost");
+    // A mid kind (crab, minDepth 3) is unreachable before its floor but
+    // reachable once it unlocks.
+    const depthsHitCrab = (depth: number) =>
+      Array.from({ length: 40 }, (_, i) => rollMobKind(depth, () => i / 40).name).includes(
+        "crab"
+      );
+    expect(depthsHitCrab(2)).toBe(false);
+    expect(depthsHitCrab(3)).toBe(true);
   });
 });
 
