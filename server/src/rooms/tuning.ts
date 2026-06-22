@@ -152,14 +152,13 @@ export const MAX_DEATH_MARKERS = 24;
 
 // --- Breakable crates (M6) ---------------------------------------------
 // Crates/barrels/kegs are destructible props: hit them to break them. They
-// award a small score bonus and have a chance to drop a heal potion. Once per
-// floor (~25% of floors) one crate hides a vault key — finding it instantly
-// opens the vault door so the party claims the chest before the countdown ends.
+// award a small score bonus and have a chance to drop a heal potion. Every
+// floor hides one vault key in a random crate — finding it instantly opens
+// the vault door so the party claims the chest before the countdown ends.
 export const CRATE_HP = 2;               // hits to destroy (2 = quick but not instant)
 export const CRATE_RADIUS = 7;           // px hit detection (added to PLAYER_ATTACK_RANGE)
 export const CRATE_SCORE_BONUS = 5;      // direct score awarded to the breaker
 export const CRATE_POTION_CHANCE = 0.4;  // 40% chance of a common heal potion drop
-export const KEY_FLOOR_CHANCE = 0.25;    // 25% of floors have one key crate
 
 // --- Vault chest (M4) --------------------------------------------------
 // One vault per floor: visible from arrival, sealed behind a timed door that
