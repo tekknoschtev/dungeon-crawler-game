@@ -62,7 +62,9 @@ each lives.
   `main` and every PR; extend it to **continuous deployment** so a merge to
   `main` rolls out to the Proxmox / Cloudflare-tunnel box automatically (today's
   manual pull → setup → build → restart loop is in [`deploy.md`](deploy.md);
-  mechanism TBD).
+  mechanism TBD). Bake a version stamp (e.g. git SHA / tag) into the build and
+  emit it on server start + as a client-visible value so it's easy to confirm the
+  latest build is actually running in prod.
 
 ## Backlog (unscheduled)
 
