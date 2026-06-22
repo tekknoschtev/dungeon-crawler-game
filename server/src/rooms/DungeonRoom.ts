@@ -29,7 +29,6 @@ import {
   CRATE_RADIUS,
   CRATE_SCORE_BONUS,
   CRATE_POTION_CHANCE,
-  KEY_FLOOR_CHANCE,
 } from "./tuning";
 import {
   dist,
@@ -316,8 +315,8 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       this.state.crates.set(id, crate);
       this.cratePositions.set(id, { tx: p.x, ty: p.y });
     }
-    // ~25% of floors hide one vault key in a random crate.
-    if (this.state.crates.size > 0 && Math.random() < KEY_FLOOR_CHANCE) {
+    // Every floor hides the vault key in one random crate.
+    if (this.state.crates.size > 0) {
       const idx = Math.floor(Math.random() * this.state.crates.size);
       let i = 0;
       this.state.crates.forEach((_, id) => {
