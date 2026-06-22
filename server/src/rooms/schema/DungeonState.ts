@@ -85,6 +85,19 @@ export class DeathMarker extends Schema {
 }
 
 /**
+ * A breakable prop (crate, barrel, keg) on the floor. Server-owned so clients
+ * see it disappear when destroyed and late-joiners don't see already-broken ones.
+ * hp ticks down as players hit it; reaching 0 triggers a drop + possible key.
+ */
+export class Crate extends Schema {
+  @type("number") x: number = 0; // pixel center
+  @type("number") y: number = 0;
+  @type("uint8") frame: number = 0; // Tiny Dungeon sheet index
+  @type("number") hp: number = 2;
+  @type("number") maxHp: number = 2;
+}
+
+/**
  * The per-floor vault chest (M4): visible from arrival, sealed behind a timed
  * door that opens once the floor's heat is spicy, then cracked open by attacking
  * it. One per floor (a `chests` MapSchema with a single entry, reusing the
@@ -136,4 +149,7 @@ export class DungeonState extends Schema {
   // The per-floor vault chest — a single-entry map (one vault per floor), reusing
   // the existing onAdd/onRemove render path. Cleared + re-armed each descent.
   @type({ map: Chest }) chests = new MapSchema<Chest>();
+  // Breakable props (crates, barrels, kegs) — synced so destruction is
+  // authoritative and late-joiners don't see already-broken ones.
+  @type({ map: Crate }) crates = new MapSchema<Crate>();
 }

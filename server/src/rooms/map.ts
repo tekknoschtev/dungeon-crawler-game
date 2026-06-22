@@ -96,6 +96,9 @@ export interface Prop {
   x: number;
   y: number;
   frame: number;
+  // True for crates/barrels/kegs that can be destroyed mid-floor (synced via
+  // state.crates). False for static furniture (anvil) that never changes.
+  breakable: boolean;
 }
 
 /**
@@ -133,6 +136,9 @@ export interface LoadedMap {
 // block movement, so a dense scatter would make rooms annoying to cross.
 const PROP_CHANCE = 0.05;
 const PROP_FRAMES = [82, 63, 73, 74, 75]; // keg, crate stack, barrel, anvil, crates
+// Frames that represent breakable containers (M6). Anvil (74) is immovable
+// furniture; everything else can be smashed for loot + a possible vault key.
+const BREAKABLE_FRAMES = new Set([82, 63, 73, 75]); // keg, crate stack, barrel, crates
 
 /**
  * Deterministic [0, 1) hash of a tile coord + salt. Coordinate-only (no seed):
@@ -205,7 +211,7 @@ function placeProps(
         continue;
       }
       const frame = PROP_FRAMES[Math.floor(coordHash(x, y, 2) * PROP_FRAMES.length)];
-      props.push({ x, y, frame });
+      props.push({ x, y, frame, breakable: BREAKABLE_FRAMES.has(frame) });
     }
   }
   return props;
