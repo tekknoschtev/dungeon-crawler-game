@@ -55,8 +55,20 @@ function $<T extends HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
 }
 
+const RECONNECT_KEY = "dc:session";
+
 /** Entry point: wire the menu, then auto-join if the URL carries a room code. */
-export function startLobby() {
+export async function startLobby() {
+  const token = sessionStorage.getItem(RECONNECT_KEY);
+  if (token) {
+    try {
+      const room = await client.reconnect(token);
+      enterGame(room);
+      return;
+    } catch {
+      sessionStorage.removeItem(RECONNECT_KEY);
+    }
+  }
   const nameInput = $<HTMLInputElement>("name");
   const codeInput = $<HTMLInputElement>("code");
   const createBtn = $<HTMLButtonElement>("create");
@@ -228,6 +240,7 @@ async function joinRoom(name: string, rawCode: string) {
 
 /** Hand the connected room to a freshly booted game and reveal the room bar. */
 function enterGame(room: Room) {
+  sessionStorage.setItem(RECONNECT_KEY, room.reconnectionToken);
   $<HTMLDivElement>("menu").hidden = true;
 
   const game = new Phaser.Game(gameConfig);

@@ -140,6 +140,7 @@ interface MobAI {
 
 export class DungeonRoom extends Room<{ state: DungeonState }> {
   maxClients = 4;
+  autoDispose = false; // managed manually so grace-period reconnects keep the room alive
 
   private map!: LoadedMap;
   // Collision grid = map.grid plus prop tiles marked solid. Kept separate from
@@ -256,11 +257,21 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     console.log(`${player.name} joined (${client.sessionId}). Players: ${this.clients.length}`);
   }
 
-  onLeave(client: Client) {
+  async onLeave(client: Client, code?: number) {
+    // code 4000 = intentional room.leave(); anything else is an unexpected drop
+    if (code !== 4000) {
+      try {
+        await this.allowReconnection(client, 30);
+        return; // reconnected successfully — player state is still intact
+      } catch {
+        // grace period expired
+      }
+    }
     this.state.players.delete(client.sessionId);
     this.inputs.delete(client.sessionId);
     this.combat.delete(client.sessionId);
-    console.log(`Left: ${client.sessionId}. Players: ${this.clients.length}`);
+    console.log(`Left: ${client.sessionId}. Players: ${this.state.players.size}`);
+    if (this.state.players.size === 0) void this.disconnect();
   }
 
   // --- Floors ------------------------------------------------------------
