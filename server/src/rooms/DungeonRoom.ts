@@ -288,6 +288,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     const seed = (this.baseSeed ^ Math.imul(depth, 0x9e3779b1)) >>> 0;
     this.state.seed = seed;
     this.map = loadMap(seed);
+    console.log(`Floor ${depth} — preset: ${this.map.preset} (seed ${seed})`);
 
     // Bake props into a collision-only grid (walls + prop tiles solid, including
     // breakable ones — they start solid and are removed from collision on break).
