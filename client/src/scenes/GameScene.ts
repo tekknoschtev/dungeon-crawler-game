@@ -218,12 +218,20 @@ interface ChestView {
   maxHp: number;
 }
 
+interface CrateView {
+  x: number;
+  y: number;
+  frame: number;
+  hp: number;
+  maxHp: number;
+}
+
 interface MapMessage {
   tile: number;
   width: number;
   height: number;
   grid: number[][];
-  props: { x: number; y: number; frame: number }[]; // solid furniture (server-placed)
+  props: { x: number; y: number; frame: number }[]; // static furniture (server-placed)
   exit: { x: number; y: number }; // descent point in TILE coords
 }
 
@@ -285,6 +293,7 @@ export class GameScene extends Phaser.Scene {
   private mobs = new Map<string, MobEntity>();
   private loot = new Map<string, LootEntity>();
   private chests = new Map<string, ChestEntity>(); // per-floor vault (one entry)
+  private crates = new Map<string, Phaser.GameObjects.Image>(); // breakable props
   private markers = new Map<string, Phaser.GameObjects.Image>(); // server-owned tombstones
   private localId = "";
 
@@ -446,6 +455,7 @@ export class GameScene extends Phaser.Scene {
       mobs: Map<string, MobView>;
       loot: Map<string, LootView>;
       chests: Map<string, ChestView>;
+      crates: Map<string, CrateView>;
       markers: Map<string, MarkerView>;
       phase: string;
     };
@@ -527,6 +537,31 @@ export class GameScene extends Phaser.Scene {
       $(ch).onChange(() => this.updateChest(ch, id));
     });
     $(state).chests.onRemove((_ch: ChestView, id: string) => this.removeChest(id));
+
+    // Breakable crates: rendered like static props but tracked so they can
+    // shatter when the server destroys them. onChange flashes on damage.
+    $(state).crates.onAdd((c: CrateView, id: string) => {
+      const img = this.add.image(c.x, c.y, TILES_KEY, c.frame).setDepth(DECOR_DEPTH);
+      this.crates.set(id, img);
+      $(c).onChange(() => {
+        const sprite = this.crates.get(id);
+        if (!sprite) return;
+        sprite.setTint(0xff6644);
+        this.time.delayedCall(120, () => { if (sprite.active) sprite.clearTint(); });
+      });
+    });
+    $(state).crates.onRemove((_c: CrateView, id: string) => {
+      const img = this.crates.get(id);
+      if (!img) return;
+      this.crates.delete(id);
+      this.tweens.add({
+        targets: img,
+        scale: 1.6,
+        alpha: 0,
+        duration: 180,
+        onComplete: () => img.destroy(),
+      });
+    });
 
     // Death markers fire onAdd for ones laid before we joined, so late-joiners see
     // the party's history; the server caps the count and culls oldest-first.

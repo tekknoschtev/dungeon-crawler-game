@@ -1,5 +1,5 @@
 import { Room, Client, matchMaker } from "colyseus";
-import { DungeonState, Player, Mob, Loot, DeathMarker, Chest } from "./schema/DungeonState";
+import { DungeonState, Player, Mob, Loot, DeathMarker, Chest, Crate } from "./schema/DungeonState";
 import { loadMap, LoadedMap, TILE } from "./map";
 import {
   PLAYER_SPEED,
@@ -25,6 +25,11 @@ import {
   CHEST_HP,
   CHEST_RADIUS,
   CHEST_BUFF_DURATION,
+  CRATE_HP,
+  CRATE_RADIUS,
+  CRATE_SCORE_BONUS,
+  CRATE_POTION_CHANCE,
+  KEY_FLOOR_CHANCE,
 } from "./tuning";
 import {
   dist,
@@ -148,7 +153,12 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   private colorIndex = 0;
   private mobSeq = 0;
   private lootSeq = 0;
+  private crateSeq = 0;
   private markerSeq = 0;
+  // Server-only crate tile positions (for removing from collision on break).
+  private cratePositions = new Map<string, { tx: number; ty: number }>();
+  // ID of the one crate on this floor that holds the vault key, or null.
+  private keyCrateId: string | null = null;
   private markerIds: string[] = []; // death-marker ids in insertion order (for culling)
   private now = 0; // accumulated simulation time in seconds
   private nextMobSpawnAt = 0;
@@ -269,7 +279,8 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.state.seed = seed;
     this.map = loadMap(seed);
 
-    // Bake props into a collision-only grid (walls + prop tiles solid).
+    // Bake props into a collision-only grid (walls + prop tiles solid, including
+    // breakable ones — they start solid and are removed from collision on break).
     this.collision = this.map.grid.map((row) => row.slice());
     for (const p of this.map.props) this.collision[p.y][p.x] = 1;
 
@@ -277,6 +288,31 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     // unreachable below) and records the chest tile to keep mobs/loot off it.
     this.state.chests.clear();
     this.placeVault(depth);
+
+    // Populate breakable crates as synced entities (not in the static map payload).
+    this.state.crates.clear();
+    this.cratePositions.clear();
+    this.keyCrateId = null;
+    for (const p of this.map.props) {
+      if (!p.breakable) continue;
+      const crate = new Crate();
+      crate.x = p.x * TILE + TILE / 2;
+      crate.y = p.y * TILE + TILE / 2;
+      crate.frame = p.frame;
+      crate.hp = CRATE_HP;
+      crate.maxHp = CRATE_HP;
+      const id = `c${this.crateSeq++}`;
+      this.state.crates.set(id, crate);
+      this.cratePositions.set(id, { tx: p.x, ty: p.y });
+    }
+    // ~25% of floors hide one vault key in a random crate.
+    if (this.state.crates.size > 0 && Math.random() < KEY_FLOOR_CHANCE) {
+      const idx = Math.floor(Math.random() * this.state.crates.size);
+      let i = 0;
+      this.state.crates.forEach((_, id) => {
+        if (i++ === idx) this.keyCrateId = id;
+      });
+    }
 
     // Cache walkable tiles for mob/loot spawns: every floor tile reachable from a
     // spawn (so the sealed vault chamber, behind the locked door, never spawns a
@@ -469,14 +505,57 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.vaultChestTile = null;
   }
 
-  /** The map payload clients render (geometry + props + the descent exit). */
+  /**
+   * Destroy a crate: open the tile in collision, award a score bonus to the
+   * breaker, maybe drop a potion, and — if this was the key crate — instantly
+   * unlock the vault door so the party can claim the chest early.
+   */
+  private breakCrate(id: string, crateX: number, crateY: number, breakerId: string) {
+    const pos = this.cratePositions.get(id);
+    if (pos) {
+      this.collision[pos.ty][pos.tx] = 0; // tile is now passable
+      this.cratePositions.delete(id);
+    }
+    this.state.crates.delete(id); // client onRemove plays shatter animation
+
+    // Score bonus to the breaker.
+    const breaker = this.state.players.get(breakerId);
+    if (breaker) breaker.score += CRATE_SCORE_BONUS;
+
+    // Possible potion drop at the crate's position.
+    if (Math.random() < CRATE_POTION_CHANCE) {
+      const loot = new Loot();
+      loot.x = crateX;
+      loot.y = crateY;
+      loot.category = "heal";
+      loot.rarity = "common";
+      loot.variant = "";
+      this.state.loot.set(`l${this.lootSeq++}`, loot);
+    }
+
+    // Key crate: instantly unlock the vault (same prize as the timed unlock).
+    if (id === this.keyCrateId) {
+      this.keyCrateId = null;
+      const chest = this.state.chests.get(VAULT_ID);
+      if (chest && chest.locked) {
+        chest.locked = false;
+        chest.unlockIn = 0;
+        if (chest.doorX >= 0 && chest.doorY >= 0) {
+          this.collision[chest.doorY][chest.doorX] = 0; // gate opens
+        }
+      }
+    }
+  }
+
+  /** The map payload clients render (geometry + static props + the descent exit).
+   *  Breakable props are excluded — they're synced via state.crates instead. */
   private mapPayload() {
     return {
       tile: this.map.tile,
       width: this.map.width,
       height: this.map.height,
       grid: this.map.grid,
-      props: this.map.props,
+      props: this.map.props.filter((p) => !p.breakable),
       exit: this.map.exit,
     };
   }
@@ -547,6 +626,14 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
           mob.x = k.x;
           mob.y = k.y;
         }
+      }
+    });
+
+    // The same swing also breaks crates in range.
+    this.state.crates.forEach((crate, id) => {
+      if (dist(crate.x, crate.y, player.x, player.y) <= PLAYER_ATTACK_RANGE + CRATE_RADIUS) {
+        crate.hp = Math.max(0, crate.hp - damage);
+        if (crate.hp <= 0) this.breakCrate(id, crate.x, crate.y, sessionId);
       }
     });
 

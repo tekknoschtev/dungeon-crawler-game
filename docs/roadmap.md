@@ -49,12 +49,22 @@ each lives.
 
 ## Next
 
-- **M6 — Floor variety** *(server, no new art)* — vary the generator knobs per
+- **M6 — Breakable crates + vault key** *(server + client)* — props marked
+  breakable (crates/barrels) can be attacked; on death they vanish, award a small
+  score bonus (no new item type — direct points, coin pickups deferred), and have
+  a chance to drop a **vault key** that instantly unlocks the floor chest
+  (bypassing the countdown timer, but awarding the same prize as if the timer had
+  run out). Key drop: rare enough to be a jackpot, not an expectation — one key
+  possible per floor, ~20–30% chance any floor has one at all. Instant pickup +
+  instant unlock for this milestone; carrying the key to the door is a later
+  refinement. Crates can also drop potions so bashing feels worthwhile even
+  without a key.
+- **M7 — Floor variety** *(server, no new art)* — vary the generator knobs per
   floor into named presets (e.g. "Warren" = many small cluttered rooms, "Hall" =
   few big open rooms) and shrink the default toward the 2–3 min traversal target.
   Knobs in `map.ts`: `MAX_ROOMS` / `ROOM_MIN` / `ROOM_MAX` / `PROP_CHANCE` /
   `MAP_W` / `MAP_H`.
-- **M7 — Quick Play matchmaking** *(server + lobby)* — mark code-created rooms
+- **M8 — Quick Play matchmaking** *(server + lobby)* — mark code-created rooms
   **private**; add a **public** path + a **Quick Play** button
   (`joinOrCreate`) alongside Create-Private + Join-by-Code. Late joiners spawn on
   the party's current floor. Touchpoints: `index.ts` `filterBy`, `lobby.ts`.
@@ -73,9 +83,6 @@ Grouped by where the work mostly lives. Tuning lives in
 new synced state.
 
 **Gameplay / loot**
-- **Breakable crates/barrels** — destructible props that may drop loot.
-- **Vault key from barrels** — a key that opens the vault door immediately when a
-  carrier is nearby (keys don't stack). Depends on breakable barrels.
 - **Permanent weapon changes** — a way to make an equipped weapon stick rather
   than lapse with the timed buff.
 - **Closeable doors** — doors a player can shut to make a safe recover/pause
@@ -105,3 +112,7 @@ new synced state.
 
 - **Score-screen polish** — the standing owner ask; revisit after the milestones
   above.
+- **Key-carrying to door** — M6 uses instant unlock on pickup; eventually the
+  player who picks up the key should carry it to the vault door to open it,
+  creating a co-op escort moment. Deferred until M8 matchmaking is in so there
+  are reliable co-op runs to design around.
