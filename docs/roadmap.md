@@ -38,6 +38,8 @@ Mobile-first, drop-in **co-op dive**. The loop:
 | **M3** | Scoring + score screen — heat multiplier, bank-on-descend, per-player table | [#12](https://github.com/tekknoschtev/dungeon-crawler-game/pull/12) |
 | **M4** | Vault chest + named relics — timed door, party points + opener heal/buff/relic | [#13](https://github.com/tekknoschtev/dungeon-crawler-game/pull/13) |
 | **M5** | Mob variety — depth-gated bestiary; per-kind stats feed pressure + scoring | [#15](https://github.com/tekknoschtev/dungeon-crawler-game/pull/15) |
+| **M6** | Breakable crates + vault key — smash crates for loot/score; guaranteed key per floor instantly unlocks the vault | [#18](https://github.com/tekknoschtev/dungeon-crawler-game/pull/18), [#21](https://github.com/tekknoschtev/dungeon-crawler-game/pull/21) |
+| **M7** | Floor variety — three named archetypes (warren/standard/hall) picked per floor from seeded RNG | [#22](https://github.com/tekknoschtev/dungeon-crawler-game/pull/22) |
 | — | Mobile HUD placement fix (stat HUD off the touch controls) | [#14](https://github.com/tekknoschtev/dungeon-crawler-game/pull/14) |
 
 Earlier systems already in place (not re-listed as backlog): CC0 art pass
@@ -49,21 +51,6 @@ each lives.
 
 ## Next
 
-- **M6 — Breakable crates + vault key** *(server + client)* — props marked
-  breakable (crates/barrels) can be attacked; on death they vanish, award a small
-  score bonus (no new item type — direct points, coin pickups deferred), and have
-  a chance to drop a **vault key** that instantly unlocks the floor chest
-  (bypassing the countdown timer, but awarding the same prize as if the timer had
-  run out). Key drop: rare enough to be a jackpot, not an expectation — one key
-  possible per floor, ~20–30% chance any floor has one at all. Instant pickup +
-  instant unlock for this milestone; carrying the key to the door is a later
-  refinement. Crates can also drop potions so bashing feels worthwhile even
-  without a key.
-- **M7 — Floor variety** *(server, no new art)* — vary the generator knobs per
-  floor into named presets (e.g. "Warren" = many small cluttered rooms, "Hall" =
-  few big open rooms) and shrink the default toward the 2–3 min traversal target.
-  Knobs in `map.ts`: `MAX_ROOMS` / `ROOM_MIN` / `ROOM_MAX` / `PROP_CHANCE` /
-  `MAP_W` / `MAP_H`.
 - **M8 — Quick Play matchmaking** *(server + lobby)* — mark code-created rooms
   **private**; add a **public** path + a **Quick Play** button
   (`joinOrCreate`) alongside Create-Private + Join-by-Code. Late joiners spawn on

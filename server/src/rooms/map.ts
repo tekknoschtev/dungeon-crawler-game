@@ -10,14 +10,32 @@
  * the exact same dungeon, and we can reproduce any layout later.
  */
 export const TILE = 16; // pixel size of one tile (native art size; the client zooms)
-export const MAP_W = 60; // tiles
+export const MAP_W = 60; // tiles (fixed — all presets share the same grid)
 export const MAP_H = 40; // tiles
 
-// Generator tuning.
-const ROOM_MIN = 5; // min room side (tiles)
-const ROOM_MAX = 11; // max room side (tiles)
-const ROOM_ATTEMPTS = 120; // how many placements to try
-const MAX_ROOMS = 14; // stop once we have this many
+/**
+ * Named floor archetypes. One is picked per floor from the seeded RNG, so every
+ * client in a room sees exactly the same layout. Adding a new preset here is the
+ * only thing needed to add a new floor type.
+ */
+interface FloorPreset {
+  name: string;
+  roomMin: number;    // min room side (tiles)
+  roomMax: number;    // max room side (tiles)
+  roomAttempts: number; // placement attempts before giving up
+  maxRooms: number;   // cap on accepted rooms
+  propChance: number; // per-tile probability of a prop on a room edge
+}
+
+const PRESETS: readonly FloorPreset[] = [
+  // Many small rooms connected by a tangle of corridors. Cramped fights,
+  // lots of crates to smash, easy to get lost.
+  { name: "warren", roomMin: 4, roomMax: 7,  roomAttempts: 200, maxRooms: 18, propChance: 0.10 },
+  // Balanced mid-range — the original generator defaults.
+  { name: "standard", roomMin: 5, roomMax: 11, roomAttempts: 120, maxRooms: 14, propChance: 0.05 },
+  // A handful of big open rooms. Wide-open fights, few props, easier to navigate.
+  { name: "hall",   roomMin: 7, roomMax: 15, roomAttempts: 80,  maxRooms: 7,  propChance: 0.02 },
+];
 
 /**
  * mulberry32 — a tiny, fast, seedable PRNG. Deterministic for a given seed and
@@ -128,13 +146,13 @@ export interface LoadedMap {
   exit: { x: number; y: number };
   /** the sealed vault chamber, or null when none could be placed (see VaultPlacement) */
   vault: VaultPlacement | null;
+  /** which floor archetype was rolled for this seed (server-side info, not sent to clients) */
+  preset: string;
 }
 
 // Prop placement. Props go only on room-edge tiles (exactly one orthogonal wall
 // neighbor) so they never sit in a 1-wide corridor, and any candidate that would
-// wall off part of the dungeon is rejected (see placeProps). Kept sparse — they
-// block movement, so a dense scatter would make rooms annoying to cross.
-const PROP_CHANCE = 0.05;
+// wall off part of the dungeon is rejected (see placeProps). Density is preset-driven.
 const PROP_FRAMES = [82, 63, 73, 74, 75]; // keg, crate stack, barrel, anvil, crates
 // Frames that represent breakable containers (M6). Anvil (74) is immovable
 // furniture; everything else can be smashed for loot + a possible vault key.
@@ -181,6 +199,7 @@ function reachableCount(
 function placeProps(
   grid: number[][],
   spawn: { x: number; y: number },
+  propChance: number,
   exclude: Set<string> = new Set()
 ): Prop[] {
   const isWall = (x: number, y: number) =>
@@ -201,7 +220,7 @@ function placeProps(
         (isWall(x, y + 1) ? 1 : 0) +
         (isWall(x - 1, y) ? 1 : 0);
       if (wallNeighbors !== 1) continue;
-      if (coordHash(x, y, 1) >= PROP_CHANCE) continue;
+      if (coordHash(x, y, 1) >= propChance) continue;
 
       // Tentatively block it; reject if it would disconnect the floor.
       const key = `${x},${y}`;
@@ -345,6 +364,9 @@ export function loadMap(seed: number): LoadedMap {
   const randInt = (min: number, max: number) =>
     min + Math.floor(rand() * (max - min + 1));
 
+  // Pick a floor archetype first — uses one RNG draw so it's part of the seed.
+  const preset = PRESETS[Math.floor(rand() * PRESETS.length)];
+
   // Start solid; we carve floors out of the rock.
   const grid: number[][] = Array.from({ length: MAP_H }, () =>
     Array.from({ length: MAP_W }, () => 1)
@@ -367,9 +389,9 @@ export function loadMap(seed: number): LoadedMap {
   };
 
   const rooms: Rect[] = [];
-  for (let i = 0; i < ROOM_ATTEMPTS && rooms.length < MAX_ROOMS; i++) {
-    const w = randInt(ROOM_MIN, ROOM_MAX);
-    const h = randInt(ROOM_MIN, ROOM_MAX);
+  for (let i = 0; i < preset.roomAttempts && rooms.length < preset.maxRooms; i++) {
+    const w = randInt(preset.roomMin, preset.roomMax);
+    const h = randInt(preset.roomMin, preset.roomMax);
     // keep a 1-tile border of solid rock around the whole map
     const x = randInt(1, MAP_W - w - 1);
     const y = randInt(1, MAP_H - h - 1);
@@ -417,7 +439,7 @@ export function loadMap(seed: number): LoadedMap {
   // floor tile (the first room center), so it needs a room to exist. Keep props
   // out of the vault chamber.
   const start = rooms.length > 0 ? roomCenter(rooms[0]) : { x: 1, y: 1 };
-  const props = placeProps(grid, start, new Set(vaultCarve?.cells ?? []));
+  const props = placeProps(grid, start, preset.propChance, new Set(vaultCarve?.cells ?? []));
 
   // Exit = the room center farthest from the start room, so descending means
   // actually crossing the floor rather than standing on the stairs you spawned at.
@@ -436,5 +458,5 @@ export function loadMap(seed: number): LoadedMap {
     ? { chest: vaultCarve.chest, door: vaultCarve.door }
     : null;
 
-  return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props, exit, vault };
+  return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props, exit, vault, preset: preset.name };
 }
