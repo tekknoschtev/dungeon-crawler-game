@@ -248,8 +248,9 @@ function whenCode(room: Room, cb: (code: string) => void) {
 function showRoomBar(code: string) {
   $<HTMLSpanElement>("roomcode").textContent = code;
 
+  // Keep the address bar clean so a refresh lands on a fresh lobby rather than
+  // a stale join attempt. The copy button still hands out a ?room= share link.
   const url = `${location.origin}${location.pathname}?room=${code}`;
-  history.replaceState(null, "", `?room=${code}`);
 
   const copyBtn = $<HTMLButtonElement>("copy");
   copyBtn.onclick = async () => {
