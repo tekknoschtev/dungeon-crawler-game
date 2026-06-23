@@ -6,6 +6,10 @@ import { MoveIntent, MOVE_INTENT_KEY } from "./UIScene";
 // Tiny Dungeon art (Kenney, CC0). The packed sheet is 16x16 tiles, 12 columns,
 // no spacing, so a tile's frame index = row * 12 + column. See ATTRIBUTION.md.
 const TILES_KEY = "tiles";
+// Tiny Town art (Kenney, CC0) — used only for the vault-key sprite that pops out
+// of a smashed key crate. Same 16x16 grid but 12 columns; key is frame #117.
+const TOWN_KEY = "town";
+const FRAME_KEY = 117;
 const TILE_SRC = 16; // source tile size in px (we scale up to the world TILE)
 const FRAME_FLOOR = 48; // plain stone floor (the common case)
 const FRAME_FLOOR_SPECKLE = 49; // subtle pebble/sand debris — same tan base as #48
@@ -346,6 +350,10 @@ export class GameScene extends Phaser.Scene {
       frameWidth: TILE_SRC,
       frameHeight: TILE_SRC,
     });
+    this.load.spritesheet(TOWN_KEY, "/assets/tiny-town/tilemap_packed.png", {
+      frameWidth: TILE_SRC,
+      frameHeight: TILE_SRC,
+    });
     this.load.image(EXIT_TEXTURE, "/assets/custom/descent-ladder.png");
   }
 
@@ -446,6 +454,13 @@ export class GameScene extends Phaser.Scene {
     // A teammate (or you) cracked the vault — gold toast naming the relic.
     this.room.onMessage<{ name: string; who: string }>("relic", ({ name, who }) => {
       this.showRelicToast(who, name);
+    });
+
+    // Someone smashed the key crate — vault door opened. Pop the key out of the
+    // crate's spot, then announce it in a toast.
+    this.room.onMessage<{ name: string; x: number; y: number }>("key_found", ({ name, x, y }) => {
+      this.playKeyPop(x, y);
+      this.showKeyFoundToast(name);
     });
 
     this.localId = this.room.sessionId;
@@ -1134,6 +1149,76 @@ export class GameScene extends Phaser.Scene {
    * Both the player name and the relic name go in via textContent — names are
    * user-supplied / server-built; keep them out of the HTML parser.
    */
+  /**
+   * The vault-key flourish: a key sprite pops out of the smashed crate, floats
+   * up with a gold sparkle, then fades as the door swings open. Purely cosmetic —
+   * the server already unlocked the vault; this just makes the moment visible.
+   */
+  private playKeyPop(x: number, y: number) {
+    const key = this.add
+      .image(x, y, TOWN_KEY, FRAME_KEY)
+      .setDisplaySize(TILE, TILE)
+      .setDepth(HUD_DEPTH - 1) // above heroes/mobs so it reads through a melee
+      .setScale(0); // tween up from nothing so it "pops"
+
+    const target = TILE / TILE_SRC; // displaySize scale that yields one TILE
+    // Pop in with a little overshoot, then drift upward and fade.
+    this.tweens.add({
+      targets: key,
+      scale: target,
+      duration: 180,
+      ease: "Back.Out",
+      onComplete: () => {
+        this.tweens.add({
+          targets: key,
+          y: y - TILE * 1.6,
+          alpha: 0,
+          duration: 650,
+          delay: 250,
+          ease: "Sine.In",
+          onComplete: () => key.destroy(),
+        });
+      },
+    });
+
+    // A soft gold glow behind it for the sparkle.
+    const glow = this.add
+      .circle(x, y, TILE * 0.7, 0xffe066, 0.5)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(HUD_DEPTH - 2);
+    this.tweens.add({
+      targets: glow,
+      scale: 1.8,
+      alpha: 0,
+      duration: 700,
+      ease: "Quad.Out",
+      onComplete: () => glow.destroy(),
+    });
+  }
+
+  private showKeyFoundToast(who: string) {
+    const container = document.getElementById("toasts");
+    if (!container) return;
+
+    const el = document.createElement("div");
+    el.className = "toast key";
+    const img = document.createElement("img");
+    img.src = "/assets/tiny-town/key.png";
+    img.className = "key-icon";
+    img.alt = "key";
+    const whoEl = document.createElement("span");
+    whoEl.className = "who";
+    whoEl.textContent = who;
+    el.append(img, whoEl, document.createTextNode(" found the vault key! Door opened."));
+    container.appendChild(el);
+
+    requestAnimationFrame(() => el.classList.add("show"));
+    window.setTimeout(() => {
+      el.classList.remove("show");
+      el.addEventListener("transitionend", () => el.remove(), { once: true });
+    }, 3500);
+  }
+
   private showRelicToast(who: string, name: string) {
     const container = document.getElementById("toasts");
     if (!container) return;

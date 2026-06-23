@@ -36,6 +36,21 @@ the local player is identified by their yellow name label rather than a drawn ri
   the gitignored `assets-src/tiny-dungeon/`).
 - Date added: 2026-06-16 (floor decoration + death markers: 2026-06-19)
 
+### Kenney — Tiny Town (1.0)
+- Source URL: https://kenney.nl/assets/tiny-town
+- Author / creator: Kenney (www.kenney.nl)
+- License: CC0 1.0 (public domain — free for any use, no attribution required)
+- License URL: https://creativecommons.org/publicdomain/zero/1.0/
+- Used for: the vault key. We ship the packed spritesheet
+  `Tilemap/tilemap_packed.png` (16×16 tiles, 12 columns, no spacing) as
+  `client/public/assets/tiny-town/tilemap_packed.png`. Frame #117 (the key) is
+  rendered in-world as the key sprite that pops out of a smashed key crate
+  (`GameScene.playKeyPop`), and is also extracted at 3× scale to
+  `client/public/assets/tiny-town/key.png` for the DOM key-found toast icon.
+- Modifications: frame #119 extracted and upscaled 3× (nearest-neighbor) for
+  the toast image; raw source extracted under the gitignored `assets-src/`.
+- Date added: 2026-06-22
+
 ### Custom — descent ladder / hatch
 - Source URL: n/a (original art created for this project)
 - Author / creator: project author (Steve)
