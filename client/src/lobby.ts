@@ -2,7 +2,7 @@ import Phaser from "phaser";
 import { Client, Room } from "@colyseus/sdk";
 import { GameScene } from "./scenes/GameScene";
 import { UIScene } from "./scenes/UIScene";
-import { SERVER_URL, ROOM_NAME, ROOM_NAME_PUBLIC, VIEW_W, VIEW_H } from "./config";
+import { SERVER_URL, ROOM_NAME, ROOM_NAME_PUBLIC, RECONNECT_KEY, VIEW_W, VIEW_H } from "./config";
 // Hero appearance options come straight from the server's canonical lists
 // (server/src/rooms/heroAppearance.ts) so the lobby can't drift from what the
 // server validates. SELECTABLE_COLORS already includes the "no color" entry.
@@ -54,8 +54,6 @@ let busy = false; // guards against double create/join while a request is in fli
 function $<T extends HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
 }
-
-const RECONNECT_KEY = "dc:session";
 
 // Set when the URL carries a ?pubid= param (public room share link). Tells
 // joinRoom to call joinById rather than look up by code.
