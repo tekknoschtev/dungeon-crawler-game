@@ -554,6 +554,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
         if (chest.doorX >= 0 && chest.doorY >= 0) {
           this.collision[chest.doorY][chest.doorX] = 0; // gate opens
         }
+        this.broadcast("key_found", { name: breaker?.name ?? "Someone", x: crateX, y: crateY });
       }
     }
   }
