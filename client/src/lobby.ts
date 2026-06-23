@@ -2,7 +2,7 @@ import Phaser from "phaser";
 import { Client, Room } from "@colyseus/sdk";
 import { GameScene } from "./scenes/GameScene";
 import { UIScene } from "./scenes/UIScene";
-import { SERVER_URL, ROOM_NAME, VIEW_W, VIEW_H } from "./config";
+import { SERVER_URL, ROOM_NAME, ROOM_NAME_PUBLIC, VIEW_W, VIEW_H } from "./config";
 // Hero appearance options come straight from the server's canonical lists
 // (server/src/rooms/heroAppearance.ts) so the lobby can't drift from what the
 // server validates. SELECTABLE_COLORS already includes the "no color" entry.
@@ -57,6 +57,10 @@ function $<T extends HTMLElement>(id: string): T {
 
 const RECONNECT_KEY = "dc:session";
 
+// Set when the URL carries a ?pubid= param (public room share link). Tells
+// joinRoom to call joinById rather than look up by code.
+let pendingPublicRoomId: string | null = null;
+
 /** Entry point: wire the menu, then auto-join if the URL carries a room code. */
 export async function startLobby() {
   const token = sessionStorage.getItem(RECONNECT_KEY);
@@ -71,6 +75,7 @@ export async function startLobby() {
   }
   const nameInput = $<HTMLInputElement>("name");
   const codeInput = $<HTMLInputElement>("code");
+  const quickplayBtn = $<HTMLButtonElement>("quickplay");
   const createBtn = $<HTMLButtonElement>("create");
   const joinBtn = $<HTMLButtonElement>("join");
 
@@ -83,33 +88,50 @@ export async function startLobby() {
     codeInput.value = codeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
   });
 
+  quickplayBtn.addEventListener("click", () => quickPlay(nameInput.value));
   createBtn.addEventListener("click", () => createRoom(nameInput.value));
   joinBtn.addEventListener("click", () => joinRoom(nameInput.value, codeInput.value));
   codeInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") joinRoom(nameInput.value, codeInput.value);
   });
-  // Enter in the name field does the obvious thing: join if a code is present,
-  // otherwise create a new room.
+  // Enter in the name field: join if a code is present (or a public room is
+  // pending), otherwise create a new private room.
   nameInput.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
-    if (CODE_RE.test(codeInput.value.trim().toUpperCase())) {
+    if (pendingPublicRoomId || CODE_RE.test(codeInput.value.trim().toUpperCase())) {
       joinRoom(nameInput.value, codeInput.value);
     } else {
       createRoom(nameInput.value);
     }
   });
 
-  // A shared link (?room=CODE) pre-fills the code and shows a focused "join this
-  // room" menu — so the joiner can still pick a name before entering, instead of
-  // being dropped straight in with the random default.
-  const fromUrl = new URLSearchParams(location.search).get("room");
+  const params = new URLSearchParams(location.search);
+
+  // ?pubid=ROOMID — public room share link (room ID, not the 4-char display code).
+  const pubId = params.get("pubid");
+  if (pubId) {
+    pendingPublicRoomId = pubId;
+    $<HTMLParagraphElement>("hint").textContent = "Joining a friend's public game — pick your hero then hit Join.";
+    $<HTMLParagraphElement>("hint").hidden = false;
+    quickplayBtn.hidden = true;
+    $<HTMLDivElement>("qpdivider").hidden = true;
+    createBtn.hidden = true;
+    $<HTMLDivElement>("ordivider").hidden = true;
+    codeInput.hidden = true;
+    nameInput.focus();
+    nameInput.select();
+    return;
+  }
+
+  // ?room=CODE — private room share link (pre-fill code, hide the create paths).
+  const fromUrl = params.get("room");
   if (fromUrl && CODE_RE.test(fromUrl.toUpperCase())) {
     const code = fromUrl.toUpperCase();
     codeInput.value = code;
     $<HTMLParagraphElement>("hint").innerHTML = `Joining room <b>${code}</b>`;
     $<HTMLParagraphElement>("hint").hidden = false;
-    // Joining a specific room — hide the create path to avoid an accidental
-    // "Create Room" tap that would spin up a different session.
+    quickplayBtn.hidden = true;
+    $<HTMLDivElement>("qpdivider").hidden = true;
     createBtn.hidden = true;
     $<HTMLDivElement>("ordivider").hidden = true;
     nameInput.focus();
@@ -198,6 +220,23 @@ function setupHeroPicker() {
   render(); // in case it's cached and already complete
 }
 
+async function quickPlay(name: string) {
+  if (busy) return;
+  setBusy(true);
+  try {
+    const room = await client.joinOrCreate(ROOM_NAME_PUBLIC, {
+      name: playerName(name),
+      color: selectedColor,
+      sprite: selectedSprite,
+    });
+    enterGame(room);
+  } catch (err) {
+    console.error("Quick Play failed:", err);
+    showError("Couldn't find or create a game. Is the server running?");
+    setBusy(false);
+  }
+}
+
 async function createRoom(name: string) {
   if (busy) return;
   setBusy(true);
@@ -217,6 +256,24 @@ async function createRoom(name: string) {
 
 async function joinRoom(name: string, rawCode: string) {
   if (busy) return;
+  // Public room share link — join by Colyseus room ID, no code needed.
+  if (pendingPublicRoomId) {
+    setBusy(true);
+    try {
+      const room = await client.joinById(pendingPublicRoomId, {
+        name: playerName(name),
+        color: selectedColor,
+        sprite: selectedSprite,
+      });
+      enterGame(room);
+    } catch (err) {
+      console.error("Join public room failed:", err);
+      showError("That room is no longer available or is full.");
+      setBusy(false);
+    }
+    return;
+  }
+  // Private room — join by 4-char code.
   const code = rawCode.trim().toUpperCase();
   if (!CODE_RE.test(code)) {
     showError("Enter a 4-character room code.");
@@ -248,7 +305,7 @@ function enterGame(room: Room) {
   // Dev-only console handle (stripped from prod builds).
   if (import.meta.env.DEV) (window as unknown as { game: Phaser.Game }).game = game;
 
-  whenCode(room, (code) => showRoomBar(code));
+  whenCode(room, (code) => showRoomBar(code, room));
 }
 
 /** Run cb with the room's join code, now or once the first state arrives. */
@@ -258,12 +315,15 @@ function whenCode(room: Room, cb: (code: string) => void) {
   else room.onStateChange.once(() => cb((room.state as { code: string }).code));
 }
 
-function showRoomBar(code: string) {
+function showRoomBar(code: string, room: Room) {
   $<HTMLSpanElement>("roomcode").textContent = code;
 
-  // Keep the address bar clean so a refresh lands on a fresh lobby rather than
-  // a stale join attempt. The copy button still hands out a ?room= share link.
-  const url = `${location.origin}${location.pathname}?room=${code}`;
+  // Private rooms share by code; public rooms share by Colyseus room ID so
+  // the joiner lands in the same specific room (no filterBy on the public pool).
+  const isPublic = room.name === ROOM_NAME_PUBLIC;
+  const url = isPublic
+    ? `${location.origin}${location.pathname}?pubid=${room.roomId}`
+    : `${location.origin}${location.pathname}?room=${code}`;
 
   const copyBtn = $<HTMLButtonElement>("copy");
   copyBtn.onclick = async () => {

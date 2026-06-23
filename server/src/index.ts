@@ -25,11 +25,14 @@ const gameServer = new Server({
   },
 });
 
-// Register our room under the name the client joins ("dungeon").
-// filterBy(["code"]) makes matchmaking route `client.join("dungeon", { code })`
-// to the room that was created with that exact code.
+// "dungeon" — private rooms. filterBy(["code"]) routes client.join({ code })
+// to the exact room that was created with that code. Cap at 50 instances.
 // maxRooms is a valid Colyseus runtime option but absent from the 0.17 TS types
-gameServer.define("dungeon", DungeonRoom, { maxRooms: 100 } as { code?: string }).filterBy(["code"]);
+gameServer.define("dungeon", DungeonRoom, { maxRooms: 50 } as { code?: string }).filterBy(["code"]);
+
+// "dungeon-public" — open matchmaking pool. No filterBy so joinOrCreate drops
+// players into any available room (or creates a new one). Cap at 50 instances.
+gameServer.define("dungeon-public", DungeonRoom, { maxRooms: 50 } as { code?: string });
 
 gameServer.listen(PORT);
 console.log(`⚔️  Dungeon server listening on :${PORT} (serving client from ${clientDist})`);
