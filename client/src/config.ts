@@ -9,6 +9,12 @@ export const SERVER_URL =
 export const ROOM_NAME = "dungeon";
 export const ROOM_NAME_PUBLIC = "dungeon-public";
 
+// sessionStorage key holding the Colyseus reconnection token. Set on join,
+// consumed on refresh to rejoin the same room (see lobby.ts), and cleared when a
+// player intentionally leaves a run (see GameScene exit flow) so a later refresh
+// lands on a clean lobby instead of trying to rejoin a room they quit.
+export const RECONNECT_KEY = "dc:session";
+
 // Must match the server's TILE constant (native art tile size). The grid
 // itself is sent by the server; this is used to size the hero sprite.
 export const TILE = 16;

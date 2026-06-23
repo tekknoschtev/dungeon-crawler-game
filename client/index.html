@@ -229,6 +229,34 @@
         font-size: 12px;
       }
 
+      /* --- Exit button: leave the run (top-right; Esc on desktop). Sits above
+         the toast stack, which is shifted down to clear it. --- */
+      #exit-btn {
+        position: fixed;
+        top: 8px;
+        right: 8px;
+        z-index: 11;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        font-size: 15px;
+        line-height: 1;
+        border-radius: 8px;
+        background: rgba(21, 23, 31, 0.85);
+        border: 1px solid var(--line);
+        color: var(--muted);
+      }
+      #exit-btn:hover {
+        border-color: #3a4150;
+        color: var(--text);
+      }
+      #exit-btn[hidden] {
+        display: none;
+      }
+
       /* --- In-game HUD: health + loot haul. Sits top-left, stacked just below
          the run HUD (floor/heat) — keeps it clear of the bottom-corner touch
          controls (floating joystick + action buttons) on mobile. --- */
@@ -385,11 +413,15 @@
         margin-bottom: 16px;
         min-height: 1em;
       }
-      .co-card .primary {
+      .co-card button {
         width: 100%;
       }
-      .co-card .primary[hidden] {
+      .co-card button[hidden] {
         display: none;
+      }
+      /* Stacked buttons (e.g. Leave / Cancel) get breathing room between them. */
+      .co-card button + button {
+        margin-top: 8px;
       }
       /* Game-over score table: per-player rows + a party total. */
       #score-board {
@@ -545,7 +577,7 @@
       /* --- Transient toasts: a hero joins or leaves the dungeon --- */
       #toasts {
         position: fixed;
-        top: 8px;
+        top: 46px;
         right: 8px;
         z-index: 11;
         display: flex;
@@ -658,8 +690,21 @@
       <button id="copy" class="rb-copy">Copy link</button>
     </div>
 
+    <!-- Leave the run (Esc on desktop). Opens the exit-confirm overlay. -->
+    <button id="exit-btn" type="button" title="Leave the run (Esc)" aria-label="Leave the run" hidden>✕</button>
+
     <!-- Transient join/leave toasts (populated by GameScene). -->
     <div id="toasts" aria-live="polite"></div>
+
+    <!-- Confirm before leaving a run. Real-time co-op: the world does NOT pause. -->
+    <div id="exit-confirm" class="center-overlay" hidden>
+      <div class="co-card">
+        <div class="co-title">Leave the dungeon?</div>
+        <div class="co-sub">Your run ends here and you'll see your scorecard. Teammates play on.</div>
+        <button id="exit-leave-btn" class="primary">Leave run</button>
+        <button id="exit-cancel-btn">Cancel</button>
+      </div>
+    </div>
 
     <!-- Run HUD: current floor + the floor's rising pressure ("heat"). -->
     <div id="run-hud" hidden>
@@ -687,7 +732,7 @@
     <!-- Center overlay when the whole party falls (M2 placeholder; M3 → score screen). -->
     <div id="gameover" class="center-overlay" hidden>
       <div class="co-card">
-        <div class="co-title">Your party fell</div>
+        <div id="gameover-title" class="co-title">Your party fell</div>
         <div id="gameover-sub" class="co-sub"></div>
         <div id="score-board">
           <div id="score-list"></div>
@@ -696,7 +741,9 @@
             <span id="score-total" class="score-val">0</span>
           </div>
         </div>
+        <!-- Party wipe → Restart (party-wide). Voluntary exit → Back to menu. -->
         <button id="restart-btn" class="primary">Restart</button>
+        <button id="backmenu-btn" class="primary" hidden>Back to menu</button>
       </div>
     </div>
 

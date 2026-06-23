@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { Room, getStateCallbacks } from "@colyseus/sdk";
-import { VIEW_W, VIEW_H, TILE } from "../config";
+import { VIEW_W, VIEW_H, TILE, RECONNECT_KEY } from "../config";
 import { MoveIntent, MOVE_INTENT_KEY } from "./UIScene";
 
 // Tiny Dungeon art (Kenney, CC0). The packed sheet is 16x16 tiles, 12 columns,
@@ -410,6 +410,20 @@ export class GameScene extends Phaser.Scene {
       .getElementById("restart-btn")
       ?.addEventListener("click", () => this.room?.send("restart"));
 
+    // Voluntary exit: X button (mobile/desktop) or Esc → confirm → leave the run.
+    document.getElementById("exit-btn")?.addEventListener("click", () => this.requestExit());
+    document
+      .getElementById("exit-cancel-btn")
+      ?.addEventListener("click", () => this.dismissExitConfirm());
+    document.getElementById("exit-leave-btn")?.addEventListener("click", () => this.confirmExit());
+    document.getElementById("backmenu-btn")?.addEventListener("click", () => this.backToMenu());
+    // Esc toggles the confirm (open if hidden, dismiss if already up).
+    kb.on("keydown-ESC", () => {
+      const confirm = document.getElementById("exit-confirm");
+      if (confirm && !confirm.hidden) this.dismissExitConfirm();
+      else this.requestExit();
+    });
+
     this.setupRoom();
   }
 
@@ -435,6 +449,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.room = room;
     this.statusText.setVisible(false);
+    this.setExitButtonVisible(true); // in-game now — offer the leave button
 
     this.room.onMessage<MapMessage>("map", (data) => this.buildMap(data));
 
@@ -1294,16 +1309,98 @@ export class GameScene extends Phaser.Scene {
     const el = document.getElementById("gameover");
     if (!el) return;
     if (!show) {
+      // Restart returned us to play — drop the overlay, offer the exit again.
       el.hidden = true;
+      this.setExitButtonVisible(true);
       return;
     }
+    // Party-wipe framing (vs. the voluntary-exit framing in showExitScorecard).
+    const title = document.getElementById("gameover-title");
+    if (title) title.textContent = "Your party fell";
     const sub = document.getElementById("gameover-sub");
     if (sub && floor !== undefined) sub.textContent = `Reached Floor ${floor}`;
+    const restart = document.getElementById("restart-btn");
+    if (restart) restart.hidden = false;
+    const back = document.getElementById("backmenu-btn");
+    if (back) back.hidden = true;
     this.buildScoreTable();
-    // The party is wiped — the per-player downed overlay gives way to this.
+    // The party is wiped — the per-player downed overlay gives way to this, and
+    // there's nothing left to leave, so hide the exit button.
     const downed = document.getElementById("downed");
     if (downed) downed.hidden = true;
+    this.setExitButtonVisible(false);
     el.hidden = false;
+  }
+
+  /** Show/hide the top-right "leave the run" button. */
+  private setExitButtonVisible(show: boolean) {
+    const btn = document.getElementById("exit-btn");
+    if (btn) btn.hidden = !show;
+  }
+
+  /**
+   * Open the leave-confirm overlay. Only meaningful during an active run — not
+   * before connecting, and not once the party has already wiped (the game-over
+   * screen owns the endgame there).
+   */
+  private requestExit() {
+    if (!this.room) return;
+    const phase = (this.room.state as { phase?: string }).phase;
+    if (phase === "gameover") return;
+    // Already showing the end-of-run scorecard (party wipe or our own exit) —
+    // nothing left to leave.
+    const over = document.getElementById("gameover");
+    if (over && !over.hidden) return;
+    const confirm = document.getElementById("exit-confirm");
+    if (confirm) confirm.hidden = false;
+  }
+
+  private dismissExitConfirm() {
+    const confirm = document.getElementById("exit-confirm");
+    if (confirm) confirm.hidden = true;
+  }
+
+  /**
+   * Commit to leaving: freeze the scorecard from current state, drop the
+   * reconnect token (so a refresh won't rejoin the room we quit), then do a
+   * consented `room.leave()` (close code 4000) — the server removes us right
+   * away with no grace period and the rest of the party plays on.
+   */
+  private confirmExit() {
+    this.dismissExitConfirm();
+    const floor = (this.room?.state as { depth?: number } | undefined)?.depth;
+    this.showExitScorecard(floor); // reads live state — must run before we leave
+    try {
+      sessionStorage.removeItem(RECONNECT_KEY);
+    } catch {
+      /* sessionStorage unavailable — nothing to clear */
+    }
+    this.room?.leave();
+  }
+
+  /** The voluntary-exit scorecard: same party board, exit framing + Back to menu. */
+  private showExitScorecard(floor?: number) {
+    const el = document.getElementById("gameover");
+    if (!el) return;
+    const title = document.getElementById("gameover-title");
+    if (title) title.textContent = "You left the dungeon";
+    const sub = document.getElementById("gameover-sub");
+    if (sub) sub.textContent = floor !== undefined ? `Left on Floor ${floor}` : "";
+    this.buildScoreTable();
+    // Restart is party-wide — wrong for a solo leaver; offer Back to menu instead.
+    const restart = document.getElementById("restart-btn");
+    if (restart) restart.hidden = true;
+    const back = document.getElementById("backmenu-btn");
+    if (back) back.hidden = false;
+    const downed = document.getElementById("downed");
+    if (downed) downed.hidden = true;
+    this.setExitButtonVisible(false);
+    el.hidden = false;
+  }
+
+  /** Leave the scorecard for a clean lobby (strip ?room=/?pubid= so we don't auto-rejoin). */
+  private backToMenu() {
+    window.location.href = window.location.origin + window.location.pathname;
   }
 
   /** Render the score rows (name + score, sorted desc) and the party total. */
