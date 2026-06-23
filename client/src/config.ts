@@ -7,6 +7,7 @@ export const SERVER_URL =
   `ws://${location.hostname || "localhost"}:2567`;
 
 export const ROOM_NAME = "dungeon";
+export const ROOM_NAME_PUBLIC = "dungeon-public";
 
 // Must match the server's TILE constant (native art tile size). The grid
 // itself is sent by the server; this is used to size the hero sprite.

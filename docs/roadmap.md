@@ -40,6 +40,7 @@ Mobile-first, drop-in **co-op dive**. The loop:
 | **M5** | Mob variety — depth-gated bestiary; per-kind stats feed pressure + scoring | [#15](https://github.com/tekknoschtev/dungeon-crawler-game/pull/15) |
 | **M6** | Breakable crates + vault key — smash crates for loot/score; guaranteed key per floor instantly unlocks the vault | [#18](https://github.com/tekknoschtev/dungeon-crawler-game/pull/18), [#21](https://github.com/tekknoschtev/dungeon-crawler-game/pull/21) |
 | **M7** | Floor variety — three named archetypes (warren/standard/hall) picked per floor from seeded RNG | [#22](https://github.com/tekknoschtev/dungeon-crawler-game/pull/22) |
+| **M8** | Quick Play matchmaking — public room pool + share links; lobby shows Quick Play / New Private Room / Join by Code | [#23](https://github.com/tekknoschtev/dungeon-crawler-game/pull/23) |
 | — | Mobile HUD placement fix (stat HUD off the touch controls) | [#14](https://github.com/tekknoschtev/dungeon-crawler-game/pull/14) |
 
 Earlier systems already in place (not re-listed as backlog): CC0 art pass
@@ -51,10 +52,6 @@ each lives.
 
 ## Next
 
-- **M8 — Quick Play matchmaking** *(server + lobby)* — mark code-created rooms
-  **private**; add a **public** path + a **Quick Play** button
-  (`joinOrCreate`) alongside Create-Private + Join-by-Code. Late joiners spawn on
-  the party's current floor. Touchpoints: `index.ts` `filterBy`, `lobby.ts`.
 - **Ops — Automate prod deploy** — CI already builds + tests on every push to
   `main` and every PR; extend it to **continuous deployment** so a merge to
   `main` rolls out to the Proxmox / Cloudflare-tunnel box automatically (today's
