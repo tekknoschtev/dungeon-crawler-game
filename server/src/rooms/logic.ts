@@ -28,6 +28,8 @@ import {
   PRESSURE_SPAWN_INTERVAL_CALM,
   PRESSURE_SPAWN_INTERVAL_HOT,
   PRESSURE_TARGET_HARD_CAP,
+  SPAWN_LULL_PER_KILL,
+  SPAWN_LULL_MAX,
   DEPTH_PRESSURE_BONUS,
   DEPTH_HP_SCALE,
   DEPTH_DAMAGE_SCALE,
@@ -378,6 +380,24 @@ export function spawnInterval(
   hot: number = PRESSURE_SPAWN_INTERVAL_HOT
 ): number {
   return lerp(calm, hot, clamp01(heat));
+}
+
+/**
+ * Spawn-lull accumulator (M9). Returns the new "no refills before this time"
+ * stamp after a kill: extends the current hold by `perKill`, but never lets the
+ * total run past `now + max`. Anchored at `max(current, now)` so a fresh kill
+ * after the hold lapsed starts from now (not the stale past stamp), while kills
+ * during an active hold stack on top of it — so a burst of simultaneous kills
+ * piles up toward the cap and a single straggler adds only a beat. Pure: the room
+ * feeds in its running stamp and the current sim time each kill.
+ */
+export function extendSpawnLull(
+  current: number,
+  now: number,
+  perKill: number = SPAWN_LULL_PER_KILL,
+  max: number = SPAWN_LULL_MAX
+): number {
+  return Math.min(Math.max(current, now) + perKill, now + max);
 }
 
 /** Mob max HP scaled for depth (1-based; floor 1 unchanged), rounded to a whole HP. */

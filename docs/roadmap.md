@@ -60,6 +60,60 @@ each lives.
   emit it on server start + as a client-visible value so it's easy to confirm the
   latest build is actually running in prod.
 
+## Comeback toolkit — deep-floor relief valves
+
+Playtesting surfaced a death spiral on deep floors (~F10+): mob damage scales
+`+10%/floor` (`DEPTH_DAMAGE_SCALE`) against a flat 100 HP, population sits near
+the `PRESSURE_TARGET_HARD_CAP` of 30, and `RESPAWN_DELAYS` ramps to 18s while
+`heat` keeps climbing — so the first death tends to cascade into a wipe and you
+can't thin a room long enough to reach the ladder. The curve itself is *fun*
+(short runs, real stakes); what's missing is **burst** — earned tools that let a
+skilled/coordinated party manufacture breathing room without flattening the ramp.
+
+Build **one at a time**, re-playtesting L12 between each (spawn-lull alone may
+relieve more than expected). Tune timid — four relief valves at full strength
+could make deep floors go soft. Possible future: gate each behind a server toggle
+so they can be A/B'd / mixed-and-matched.
+
+- **M9 — Spawn lull (build first).** A mob's death suppresses its slot's refill
+  for a few seconds, and each kill extends the suppression. Chip one mob → no
+  relief; rout a cluster at once → the floor goes quiet for several seconds.
+  Re-uses the existing pressure spawner (`PRESSURE_SPAWN_INTERVAL_*`); the
+  cheapest item and highest-leverage — makes killing feel like progress again and
+  turns AoE/clustering into a deliberate pressure-relief tactic. A second payoff
+  for knockback weapons and the M10 bomb. *Starting knobs:* per-kill
+  refill-suppression ~2–3s, extended/stacked by simultaneous kills. (Possible
+  later: name the moment a "rout" and hang a score combo on it — resist for now.)
+
+- **M10 — Collectible bomb** (Tiny Town tile `0105`). Crates gain a chance to drop
+  a bomb the player carries and places with the **E key** (+ a contextual mobile
+  button that appears *only* while a bomb is held). On a short fuse it deals a
+  local blast (radius damage + knockback — **hurts the placer too** if they're
+  still inside) *and* stuns every mob on the map. Two halves on purpose: the
+  map-wide stun is the *relief* (freeze the swarm to reposition / revive / bolt
+  for the stairs); the local blast is the *skill/risk* (bait a cluster, then step
+  out of the radius — the stun covers your retreat). **Deliberate exception** to
+  two locked decisions — "loot stays immediate-use" and "no new buttons" — taken
+  because a comeback tool's value is agency (aimed/timed beats auto-trigger); the
+  contextual, transient mobile button keeps the HUD honest, and `MAX_HEAL_CHARGES`
+  is precedent for a stockpiled count. *Starting knobs:* crate drop ~15–20%
+  **biased deeper** (rubber-band: bombs show up when you need them), carry cap ~2,
+  blast radius ~45px, fuse ~1.2s, map-wide stun ~2.5s.
+
+- **M11 — Exit pulse.** Starting the descent channel (`DESCEND_CHANNEL_TIME`)
+  makes the ladder emit a knockback/stagger pulse that shoves nearby mobs back, so
+  racing to the stairs is a viable escape *under fire* — not something you can only
+  do once a room is already clear. The reliable escape the rare bomb can't
+  guarantee; descent is already the intended pressure reset (`enterFloor`), this
+  makes it reachable.
+
+- **M12 — Co-revive reprieve.** A revive grants a brief shared invuln (~1.5s) to
+  reviver *and* revived, plus a small knockback pulse to clear the immediate space.
+  Stops the "revived straight back into the swarm" instant re-down and rewards the
+  healer's risk — the clearest mechanical incentive to play grouped. Builds on the
+  existing revive (`REVIVE_RANGE`, `REVIVE_HP_PCT`). Ship alongside M11 as a co-op
+  polish pass.
+
 ## Backlog (unscheduled)
 
 Grouped by where the work mostly lives. Tuning lives in
