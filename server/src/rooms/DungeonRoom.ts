@@ -21,6 +21,10 @@ import {
   EXIT_RADIUS,
   DESCEND_CHANNEL_TIME,
   DESCEND_FADE_MS,
+  EXIT_PULSE_RADIUS,
+  EXIT_PULSE_INTERVAL,
+  EXIT_PULSE_KNOCKBACK,
+  EXIT_PULSE_STAGGER,
   CHEST_UNLOCK_TIME,
   CHEST_HP,
   CHEST_RADIUS,
@@ -182,6 +186,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   private baseSeed = 0; // room seed; each floor derives its layout from this + depth
   private floorStartAt = 0; // sim time the current floor began (drives the pressure ramp)
   private descendProgress = 0; // s a hero has held the exit toward the descend channel
+  private nextExitPulseAt = 0; // sim time the next exit ward-pulse may fire (M11)
   private descending = false; // true during the fade-out window before the floor swaps
   // TILE coords of the current floor's vault chest, so mob/loot spawns stay off
   // it. The door tile (when there is one) is sealed in `collision`, so it's
@@ -625,6 +630,15 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       this.descendProgress = 0;
       return;
     }
+
+    // Ward the stairs (M11): pulse the moment channeling begins, then on an
+    // interval while it holds — shoving + staggering nearby mobs so the channel
+    // can survive under fire. descendProgress is exactly 0 only on the first tick.
+    if (this.descendProgress === 0 || this.now >= this.nextExitPulseAt) {
+      this.exitPulse(ex, ey);
+      this.nextExitPulseAt = this.now + EXIT_PULSE_INTERVAL;
+    }
+
     this.descendProgress += dt;
     if (this.descendProgress >= DESCEND_CHANNEL_TIME) {
       // Tell clients to fade to black, then swap floors under cover of it so the
@@ -647,6 +661,27 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
         this.descending = false;
       }, DESCEND_FADE_MS);
     }
+  }
+
+  /**
+   * One exit ward-pulse (M11): shove every mob within range away from the ladder
+   * and briefly stagger it (reusing the bomb stun field; Math.max so it never
+   * shortens a longer stun). Broadcasts so clients ring the ladder — the stagger
+   * tint rides the synced Mob.stunned for free.
+   */
+  private exitPulse(ex: number, ey: number) {
+    this.state.mobs.forEach((mob, id) => {
+      if (dist(mob.x, mob.y, ex, ey) > EXIT_PULSE_RADIUS + MOB_RADIUS) return;
+      const k = applyKnockback(
+        this.collision, this.map.width, this.map.height, TILE,
+        ex, ey, mob.x, mob.y, EXIT_PULSE_KNOCKBACK, MOB_RADIUS
+      );
+      mob.x = k.x;
+      mob.y = k.y;
+      const ai = this.mobAI.get(id);
+      if (ai) ai.stunnedUntil = Math.max(ai.stunnedUntil, this.now + EXIT_PULSE_STAGGER);
+    });
+    this.broadcast("exit_pulse", { x: ex, y: ey });
   }
 
   // --- Combat ------------------------------------------------------------

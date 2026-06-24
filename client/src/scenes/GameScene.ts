@@ -118,6 +118,8 @@ const MOB_DEPTH = 8; // mobs render just under heroes (depth 10)
 const LOOT_DEPTH = 5;
 const EXIT_DEPTH = 4; // descent beacon: above the floor, below loot/mobs
 const EXIT_TEXTURE = "descent-ladder"; // custom 16×16 ladder/hatch sprite (client/public/assets/custom)
+const EXIT_PULSE_RADIUS = 40; // px — mirrors server EXIT_PULSE_RADIUS (ward ring size)
+const EXIT_PULSE_COLOR = 0x9ffff0; // teal, matching the descent hint
 const LOOT_GLOW_DEPTH = 4;
 const ATTACK_COOLDOWN_MS = 450; // client throttle; mirrors the server cooldown
 const SWING_RADIUS = 26; // world px of the local swing ring (feedback only)
@@ -510,6 +512,12 @@ export class GameScene extends Phaser.Scene {
     this.room.onMessage<{ name: string; x: number; y: number }>("key_found", ({ name, x, y }) => {
       this.playKeyPop(x, y);
       this.showKeyFoundToast(name);
+    });
+
+    // The descent stairs warded a hero who's channeling (M11) — ring the ladder.
+    // The mobs' stagger rides their synced `stunned` tint, so no extra work here.
+    this.room.onMessage<{ x: number; y: number }>("exit_pulse", ({ x, y }) => {
+      this.playExitPulse(x, y);
     });
 
     this.localId = this.room.sessionId;
@@ -1173,6 +1181,22 @@ export class GameScene extends Phaser.Scene {
       // Reset on the same callback (no stray timer touching a freed sprite if the
       // mob dies mid-animation; removeMob kills the tween before destroying it).
       onComplete: () => s.setScale(m.baseScale).clearTint(),
+    });
+  }
+
+  /** The exit ward-pulse (M11): a teal ring expanding from the ladder. */
+  private playExitPulse(x: number, y: number) {
+    const ring = this.add
+      .circle(x, y, EXIT_PULSE_RADIUS, EXIT_PULSE_COLOR, 0)
+      .setStrokeStyle(2, EXIT_PULSE_COLOR, 0.8)
+      .setDepth(15);
+    this.tweens.add({
+      targets: ring,
+      scale: 1.5,
+      alpha: 0,
+      duration: 280,
+      ease: "Quad.easeOut",
+      onComplete: () => ring.destroy(),
     });
   }
 
