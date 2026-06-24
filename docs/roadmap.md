@@ -41,6 +41,8 @@ Mobile-first, drop-in **co-op dive**. The loop:
 | **M6** | Breakable crates + vault key — smash crates for loot/score; guaranteed key per floor instantly unlocks the vault | [#18](https://github.com/tekknoschtev/dungeon-crawler-game/pull/18), [#21](https://github.com/tekknoschtev/dungeon-crawler-game/pull/21) |
 | **M7** | Floor variety — three named archetypes (warren/standard/hall) picked per floor from seeded RNG | [#22](https://github.com/tekknoschtev/dungeon-crawler-game/pull/22) |
 | **M8** | Quick Play matchmaking — public room pool + share links; lobby shows Quick Play / New Private Room / Join by Code | [#23](https://github.com/tekknoschtev/dungeon-crawler-game/pull/23) |
+| **M9** | Spawn lull — a kill holds off the pressure refill (stacking, capped), so routing a cluster quiets the floor; killing *en masse* becomes a relief tactic | [#26](https://github.com/tekknoschtev/dungeon-crawler-game/pull/26) |
+| **M10** | Collectible bomb — crate-dropped (rubber-banded deeper); place with E / contextual mobile button → local blast (hurts the placer) + map-wide stun | [#27](https://github.com/tekknoschtev/dungeon-crawler-game/pull/27) |
 | — | Mobile HUD placement fix (stat HUD off the touch controls) | [#14](https://github.com/tekknoschtev/dungeon-crawler-game/pull/14) |
 
 Earlier systems already in place (not re-listed as backlog): CC0 art pass
@@ -70,35 +72,15 @@ can't thin a room long enough to reach the ladder. The curve itself is *fun*
 (short runs, real stakes); what's missing is **burst** — earned tools that let a
 skilled/coordinated party manufacture breathing room without flattening the ramp.
 
-Build **one at a time**, re-playtesting L12 between each (spawn-lull alone may
-relieve more than expected). Tune timid — four relief valves at full strength
-could make deep floors go soft. Possible future: gate each behind a server toggle
-so they can be A/B'd / mixed-and-matched.
+Build **one at a time**, re-playtesting L12 between each. Tune timid — four relief
+valves at full strength could make deep floors go soft. Possible future: gate each
+behind a server toggle so they can be A/B'd / mixed-and-matched.
 
-- **M9 — Spawn lull (build first).** A mob's death suppresses its slot's refill
-  for a few seconds, and each kill extends the suppression. Chip one mob → no
-  relief; rout a cluster at once → the floor goes quiet for several seconds.
-  Re-uses the existing pressure spawner (`PRESSURE_SPAWN_INTERVAL_*`); the
-  cheapest item and highest-leverage — makes killing feel like progress again and
-  turns AoE/clustering into a deliberate pressure-relief tactic. A second payoff
-  for knockback weapons and the M10 bomb. *Starting knobs:* per-kill
-  refill-suppression ~2–3s, extended/stacked by simultaneous kills. (Possible
-  later: name the moment a "rout" and hang a score combo on it — resist for now.)
-
-- **M10 — Collectible bomb** (Tiny Town tile `0105`). Crates gain a chance to drop
-  a bomb the player carries and places with the **E key** (+ a contextual mobile
-  button that appears *only* while a bomb is held). On a short fuse it deals a
-  local blast (radius damage + knockback — **hurts the placer too** if they're
-  still inside) *and* stuns every mob on the map. Two halves on purpose: the
-  map-wide stun is the *relief* (freeze the swarm to reposition / revive / bolt
-  for the stairs); the local blast is the *skill/risk* (bait a cluster, then step
-  out of the radius — the stun covers your retreat). **Deliberate exception** to
-  two locked decisions — "loot stays immediate-use" and "no new buttons" — taken
-  because a comeback tool's value is agency (aimed/timed beats auto-trigger); the
-  contextual, transient mobile button keeps the HUD honest, and `MAX_HEAL_CHARGES`
-  is precedent for a stockpiled count. *Starting knobs:* crate drop ~15–20%
-  **biased deeper** (rubber-band: bombs show up when you need them), carry cap ~2,
-  blast radius ~45px, fuse ~1.2s, map-wide stun ~2.5s.
+**Shipped:** **M9 — Spawn lull** ([#26](https://github.com/tekknoschtev/dungeon-crawler-game/pull/26))
+and **M10 — Collectible bomb** ([#27](https://github.com/tekknoschtev/dungeon-crawler-game/pull/27));
+see the [Shipped](#shipped) table. Bomb kills route through `killMob`, so they
+feed the spawn lull for free — a cluster detonation quiets the floor afterward.
+Remaining (a co-op polish pass, shippable together):
 
 - **M11 — Exit pulse.** Starting the descent channel (`DESCEND_CHANNEL_TIME`)
   makes the ladder emit a knockback/stagger pulse that shoves nearby mobs back, so
