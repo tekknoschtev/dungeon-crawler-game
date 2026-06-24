@@ -101,6 +101,19 @@ export const PRESSURE_SPAWN_INTERVAL_CALM = 5.0; // s between top-up spawns at h
 export const PRESSURE_SPAWN_INTERVAL_HOT = 1.2; // s between top-up spawns at heat 1
 export const PRESSURE_TARGET_HARD_CAP = 30; // absolute population ceiling (depth bonus included)
 
+// --- Spawn lull (M9) ---------------------------------------------------
+// A comeback valve for deep floors. When a mob dies its slot doesn't refill
+// immediately — the pressure spawner is held off for a beat, and every kill
+// extends the hold (stacking up to a cap). So chipping one mob barely registers
+// against the hot top-up cadence (PRESSURE_SPAWN_INTERVAL_HOT ~1.2s), but routing
+// a cluster at once — AoE, knockback, the M10 bomb — empties a stack of slots
+// that all stay empty together, buying several seconds of quiet. This is what
+// makes killing *en masse* feel like progress and a deliberate pressure-relief
+// tactic. PER_KILL is deliberately under the hot interval so a single kill is no
+// relief; MAX caps a huge rout so the floor can't be emptied indefinitely.
+export const SPAWN_LULL_PER_KILL = 0.6; // s of refill suppression added per kill
+export const SPAWN_LULL_MAX = 4.0; // s — ceiling on accumulated suppression
+
 // --- Depth scaling -----------------------------------------------------
 // Each floor deeper raises the stakes: tougher mobs and a higher starting
 // pressure baseline, so "go deeper" means "scarier." depth is 1-based — floor 1

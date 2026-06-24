@@ -57,6 +57,7 @@ import {
   spawnInterval,
   scaleMobHp,
   scaleMobDamage,
+  extendSpawnLull,
   chestPoints,
   rollRelic,
   type AggroCandidate,
@@ -162,6 +163,10 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   private markerIds: string[] = []; // death-marker ids in insertion order (for culling)
   private now = 0; // accumulated simulation time in seconds
   private nextMobSpawnAt = 0;
+  // Spawn-lull stamp (M9): the pressure spawner holds off refilling until sim time
+  // passes this. Each mob kill pushes it out (see killMob / extendSpawnLull), so
+  // routing a cluster buys quiet. Reset per floor.
+  private spawnSuppressedUntil = 0;
   private baseSeed = 0; // room seed; each floor derives its layout from this + depth
   private floorStartAt = 0; // sim time the current floor began (drives the pressure ramp)
   private descendProgress = 0; // s a hero has held the exit toward the descend channel
@@ -340,6 +345,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.markerIds = [];
     this.floorStartAt = this.now;
     this.nextMobSpawnAt = this.now;
+    this.spawnSuppressedUntil = this.now; // no carried-over lull on a fresh floor
     this.descendProgress = 0;
     this.state.heat = 0;
 
@@ -766,6 +772,9 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.dropLoot(mob.x, mob.y);
     this.state.mobs.delete(id);
     this.mobAI.delete(id);
+    // Hold off the pressure refill (M9). Killing en masse stacks the lull toward
+    // its cap, so a rout — not a trickle — is what actually quiets the floor.
+    this.spawnSuppressedUntil = extendSpawnLull(this.spawnSuppressedUntil, this.now);
   }
 
   // --- Mobs --------------------------------------------------------------
@@ -963,7 +972,8 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     if (
       this.state.phase === "playing" &&
       this.state.mobs.size < targetMobCount(heat, this.state.depth) &&
-      this.now >= this.nextMobSpawnAt
+      this.now >= this.nextMobSpawnAt &&
+      this.now >= this.spawnSuppressedUntil // M9: recent kills hold the refill off
     ) {
       this.spawnMob();
       this.nextMobSpawnAt = this.now + spawnInterval(heat);

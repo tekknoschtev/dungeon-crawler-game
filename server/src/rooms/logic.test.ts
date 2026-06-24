@@ -18,6 +18,7 @@ import {
   heatLevel,
   targetMobCount,
   spawnInterval,
+  extendSpawnLull,
   scaleMobHp,
   scaleMobDamage,
   respawnDelay,
@@ -306,6 +307,31 @@ describe("spawnInterval", () => {
     expect(spawnInterval(0, 5, 1)).toBe(5);
     expect(spawnInterval(1, 5, 1)).toBe(1);
     expect(spawnInterval(0.5, 5, 1)).toBe(3);
+  });
+});
+
+describe("extendSpawnLull (M9)", () => {
+  it("adds one beat per kill from an unsuppressed state", () => {
+    // current stamp is in the past (no active hold) → anchored at now.
+    expect(extendSpawnLull(0, 100, 0.6, 4)).toBeCloseTo(100.6);
+  });
+
+  it("stacks when kills land during an active hold", () => {
+    // Simulate a rout: repeated kills at the same instant pile onto the stamp.
+    let stamp = 100;
+    for (let i = 0; i < 3; i++) stamp = extendSpawnLull(stamp, 100, 0.6, 4);
+    expect(stamp).toBeCloseTo(101.8); // 100 + 3 * 0.6
+  });
+
+  it("caps a huge rout so the floor can't be emptied forever", () => {
+    let stamp = 100;
+    for (let i = 0; i < 20; i++) stamp = extendSpawnLull(stamp, 100, 0.6, 4);
+    expect(stamp).toBe(104); // now + max, never beyond
+  });
+
+  it("re-anchors at now once the previous hold has lapsed", () => {
+    // A stale stamp (kill long ago) shouldn't shorten the new hold.
+    expect(extendSpawnLull(100, 200, 0.6, 4)).toBeCloseTo(200.6);
   });
 });
 
