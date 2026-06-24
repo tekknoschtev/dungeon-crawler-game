@@ -129,6 +129,16 @@ export const DEPTH_DAMAGE_SCALE = 0.1; // +10% mob damage per floor below 1
 // everyone mid-fight.
 export const EXIT_RADIUS = 14; // px — how close a hero must be to count as "on" the exit
 export const DESCEND_CHANNEL_TIME = 1.5; // s a hero must hold the exit before the party descends
+
+// Exit pulse (M11): the descent is the intended pressure reset, but you have to
+// survive the channel to reach it. While a hero holds the exit, the ladder wards
+// the stairs — periodic pulses shove nearby mobs back and briefly stagger them
+// (reusing the bomb stun + applyKnockback) — so racing to the stairs is a viable
+// escape *under fire*, not something you can only do once a room's already clear.
+export const EXIT_PULSE_RADIUS = 40; // px — how far from the ladder a pulse reaches
+export const EXIT_PULSE_INTERVAL = 0.5; // s between pulses while a hero channels
+export const EXIT_PULSE_KNOCKBACK = 36; // px a pulsed mob is shoved away from the ladder
+export const EXIT_PULSE_STAGGER = 0.5; // s a pulsed mob is staggered (stunned)
 // On descend the server signals clients (fade to black), waits this long so the
 // screen is black, then swaps floors — so the teleport happens unseen, not as a pop.
 export const DESCEND_FADE_MS = 300;
