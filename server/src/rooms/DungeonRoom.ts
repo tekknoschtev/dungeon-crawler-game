@@ -1,5 +1,5 @@
 import { Room, Client, matchMaker } from "colyseus";
-import { DungeonState, Player, Mob, Loot, DeathMarker, Chest, Crate } from "./schema/DungeonState";
+import { DungeonState, Player, Mob, Loot, DeathMarker, Chest, Crate, Bomb } from "./schema/DungeonState";
 import { loadMap, LoadedMap, TILE } from "./map";
 import {
   PLAYER_SPEED,
@@ -29,6 +29,11 @@ import {
   CRATE_RADIUS,
   CRATE_SCORE_BONUS,
   CRATE_POTION_CHANCE,
+  BOMB_FUSE,
+  BOMB_BLAST_RADIUS,
+  BOMB_BLAST_DAMAGE,
+  BOMB_KNOCKBACK,
+  BOMB_STUN,
 } from "./tuning";
 import {
   dist,
@@ -58,6 +63,7 @@ import {
   scaleMobHp,
   scaleMobDamage,
   extendSpawnLull,
+  crateBombChance,
   chestPoints,
   rollRelic,
   type AggroCandidate,
@@ -132,6 +138,8 @@ interface MobAI {
   nextWanderAt: number;
   wanderDx: number;
   wanderDy: number;
+  // Sim time a bomb stun wears off (M10); while now < this the mob is frozen.
+  stunnedUntil: number;
 }
 
 // Hero appearance (colors + body sprites) lives in ./heroAppearance — the
@@ -155,6 +163,10 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   private mobSeq = 0;
   private lootSeq = 0;
   private crateSeq = 0;
+  private bombSeq = 0;
+  // Server-only: placed-bomb id → the player who placed it, so detonation kills
+  // credit the right hero (score + M9 lull). Cleared per floor with the bombs map.
+  private bombOwners = new Map<string, string>();
   private markerSeq = 0;
   // Server-only crate tile positions (for removing from collision on break).
   private cratePositions = new Map<string, { tx: number; ty: number }>();
@@ -209,6 +221,9 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
 
     // Quaff the carried heal potion — or, near a downed ally, spend it to revive them.
     this.onMessage("useHeal", (client) => this.handleUseHeal(client.sessionId));
+
+    // Place a carried bomb at the hero's feet (M10).
+    this.onMessage("useBomb", (client) => this.handleUseBomb(client.sessionId));
 
     // Spend a life to self-respawn once the downed cooldown has unlocked.
     this.onMessage("respawn", (client) => this.handleRespawn(client.sessionId));
@@ -341,6 +356,8 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.state.mobs.clear();
     this.mobAI.clear();
     this.state.loot.clear();
+    this.state.bombs.clear();
+    this.bombOwners.clear();
     this.state.markers.clear();
     this.markerIds = [];
     this.floorStartAt = this.now;
@@ -550,6 +567,18 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       this.state.loot.set(`l${this.lootSeq++}`, loot);
     }
 
+    // Possible bomb drop (M10) — an independent roll, rubber-banded deeper so the
+    // comeback tool surfaces more on the floors that need it. Picked up like loot.
+    if (Math.random() < crateBombChance(this.state.depth)) {
+      const loot = new Loot();
+      loot.x = crateX;
+      loot.y = crateY;
+      loot.category = "bomb";
+      loot.rarity = "common";
+      loot.variant = "";
+      this.state.loot.set(`l${this.lootSeq++}`, loot);
+    }
+
     // Key crate: instantly unlock the vault (same prize as the timed unlock).
     if (id === this.keyCrateId) {
       this.keyCrateId = null;
@@ -694,6 +723,82 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     player.healCharges--;
   }
 
+  /**
+   * Place a carried bomb at the hero's feet (M10). No-op while downed, out of
+   * bombs, or once the run's over. The fuse + blast are simulated in updateBombs.
+   */
+  private handleUseBomb(sessionId: string) {
+    if (this.state.phase !== "playing") return;
+    const player = this.state.players.get(sessionId);
+    if (!player || player.downed || player.bombs <= 0) return;
+    player.bombs--;
+    const bomb = new Bomb();
+    bomb.x = player.x;
+    bomb.y = player.y;
+    bomb.fuse = BOMB_FUSE;
+    const id = `b${this.bombSeq++}`;
+    this.state.bombs.set(id, bomb);
+    this.bombOwners.set(id, sessionId);
+  }
+
+  /**
+   * Tick placed bombs; detonate any whose fuse has run out. Frozen once the run's
+   * over so a lingering fuse can't fire on the score screen.
+   */
+  private updateBombs(dt: number) {
+    if (this.state.phase !== "playing") return;
+    this.state.bombs.forEach((bomb, id) => {
+      bomb.fuse -= dt;
+      if (bomb.fuse <= 0) this.detonateBomb(id, bomb);
+    });
+  }
+
+  /**
+   * Blow a bomb (M10). A LOCAL blast damages + knocks back mobs in range and
+   * damages any hero caught in it — including the placer who didn't step clear
+   * (the risk). Then EVERY surviving mob on the floor is stunned for a beat (the
+   * relief). Mob kills route through killMob, so they credit the placer's score
+   * and feed the M9 spawn lull. Removes the bomb — the client plays the burst.
+   */
+  private detonateBomb(id: string, bomb: Bomb) {
+    const ownerId = this.bombOwners.get(id) ?? "";
+    const bx = bomb.x;
+    const by = bomb.y;
+
+    // Local blast: damage + knockback mobs within range (kills credit the placer).
+    this.state.mobs.forEach((mob, mid) => {
+      if (dist(mob.x, mob.y, bx, by) > BOMB_BLAST_RADIUS + MOB_RADIUS) return;
+      mob.hp -= BOMB_BLAST_DAMAGE;
+      if (mob.hp <= 0) {
+        this.killMob(mid, mob, ownerId);
+        return;
+      }
+      const k = applyKnockback(
+        this.collision, this.map.width, this.map.height, TILE,
+        bx, by, mob.x, mob.y, BOMB_KNOCKBACK, MOB_RADIUS
+      );
+      mob.x = k.x;
+      mob.y = k.y;
+    });
+
+    // Map-wide stun: freeze every surviving mob (the breathing room).
+    this.state.mobs.forEach((_mob, mid) => {
+      const ai = this.mobAI.get(mid);
+      if (ai) ai.stunnedUntil = this.now + BOMB_STUN;
+    });
+
+    // The blast is indiscriminate: a living hero in range takes it too. Downing
+    // falls out of the normal hp<=0 handling on the next tick.
+    this.state.players.forEach((p) => {
+      if (p.hp > 0 && dist(p.x, p.y, bx, by) <= BOMB_BLAST_RADIUS + PLAYER_RADIUS) {
+        p.hp = Math.max(0, p.hp - BOMB_BLAST_DAMAGE);
+      }
+    });
+
+    this.state.bombs.delete(id);
+    this.bombOwners.delete(id);
+  }
+
   /** The closest downed ally to (x, y) within REVIVE_RANGE, or undefined. */
   private nearestDownedAlly(
     sessionId: string,
@@ -738,6 +843,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       player.respawnIn = 0;
       player.respawnsLeft = STARTING_LIVES;
       player.healCharges = 0;
+      player.bombs = 0;
       player.attackBuff = 0;
       player.defenseBuff = 0;
       player.weapon = "";
@@ -795,12 +901,19 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     mob.maxHp = hp;
     const id = `m${this.mobSeq++}`;
     this.state.mobs.set(id, mob);
-    this.mobAI.set(id, { attackReadyAt: 0, nextWanderAt: 0, wanderDx: 0, wanderDy: 0 });
+    this.mobAI.set(id, { attackReadyAt: 0, nextWanderAt: 0, wanderDx: 0, wanderDy: 0, stunnedUntil: 0 });
   }
 
   private updateMob(mob: Mob, id: string, dt: number, candidates: AggroCandidate[]) {
     const ai = this.mobAI.get(id);
     if (!ai) return;
+
+    // Bomb stun (M10): frozen mobs don't move or attack. Toggle the synced flag
+    // only on the transition so it stays off the wire while unchanged.
+    const stunned = this.now < ai.stunnedUntil;
+    if (mob.stunned !== stunned) mob.stunned = stunned;
+    if (stunned) return;
+
     const kind = mobByName(mob.kind); // per-kind aggro / damage (M5)
 
     // Aggro the nearest living player within range (candidates pre-filtered to
@@ -952,8 +1065,11 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       // hold (full stack) is left on the floor instead of being wasted.
       this.state.loot.forEach((loot, lid) => {
         if (dist(loot.x, loot.y, player.x, player.y) <= PICKUP_RANGE && applyLootEffect(player, c, loot)) {
-          // Grabbing a drop scores by its rarity, at the floor's live multiplier.
-          player.score += Math.round(lootScore(loot.rarity) * scoreMultiplier(this.state.heat));
+          // Grabbing a drop scores by its rarity, at the floor's live multiplier —
+          // except a bomb, which is a carried tool, not a haul (no points).
+          if (loot.category !== "bomb") {
+            player.score += Math.round(lootScore(loot.rarity) * scoreMultiplier(this.state.heat));
+          }
           this.state.loot.delete(lid);
         }
       });
@@ -978,6 +1094,9 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       this.spawnMob();
       this.nextMobSpawnAt = this.now + spawnInterval(heat);
     }
+
+    // Tick placed bombs; detonate any whose fuse has run out (M10).
+    this.updateBombs(dt);
 
     // Tick the vault's unlock countdown (opens its door when it lands).
     this.updateChest(dt);

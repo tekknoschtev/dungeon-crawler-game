@@ -12,6 +12,10 @@ import {
   MOB_DAMAGE,
   BUFF_DURATION,
   MAX_HEAL_CHARGES,
+  MAX_BOMBS,
+  CRATE_BOMB_CHANCE_BASE,
+  CRATE_BOMB_CHANCE_DEPTH,
+  CRATE_BOMB_CHANCE_MAX,
   PASSIVE_REGEN,
   RARITIES,
   RARITY_TOTAL,
@@ -143,6 +147,7 @@ export interface LootTarget {
   attackBuff: number;
   defenseBuff: number;
   healCharges: number;
+  bombs: number; // carried bombs (M10) — a "bomb" drop banks one, capped
   weapon: string; // name of the equipped weapon backing the attack buff (HUD icon)
 }
 
@@ -180,6 +185,13 @@ export function applyLootEffect(target: LootTarget, buffs: LootBuffs, loot: Loot
     buffs.knockback = Math.max(buffs.knockback, w.knockback);
     return true;
   }
+  if (loot.category === "bomb") {
+    // A carried tool, not a buff: bank one if there's room, else leave it on the
+    // floor (like a full heal stack) so a teammate — or you, later — can grab it.
+    if (target.bombs >= MAX_BOMBS) return false;
+    target.bombs++;
+    return true;
+  }
   const r = rarityByName(loot.rarity);
   if (loot.category === "defense") {
     target.defenseBuff = BUFF_DURATION;
@@ -190,6 +202,21 @@ export function applyLootEffect(target: LootTarget, buffs: LootBuffs, loot: Loot
   if (target.healCharges >= MAX_HEAL_CHARGES) return false;
   target.healCharges++;
   return true;
+}
+
+/**
+ * Chance (0..1) a broken crate drops a bomb on floor `depth`. Rubber-banded:
+ * climbs from the floor-1 base by a per-depth bump (capped), so deep floors —
+ * exactly where the comeback tool is wanted — hand them out more often. `depth`
+ * is 1-based (floor 1 gets the base, no bonus). Pure for testing.
+ */
+export function crateBombChance(
+  depth: number,
+  base: number = CRATE_BOMB_CHANCE_BASE,
+  perDepth: number = CRATE_BOMB_CHANCE_DEPTH,
+  max: number = CRATE_BOMB_CHANCE_MAX
+): number {
+  return Math.min(max, base + perDepth * Math.max(0, depth - 1));
 }
 
 // --- Combat damage -----------------------------------------------------

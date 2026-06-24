@@ -1,7 +1,7 @@
 import Phaser from "phaser";
 import { Room, getStateCallbacks } from "@colyseus/sdk";
 import { VIEW_W, VIEW_H, TILE, RECONNECT_KEY } from "../config";
-import { MoveIntent, MOVE_INTENT_KEY } from "./UIScene";
+import { MoveIntent, MOVE_INTENT_KEY, BOMB_COUNT_KEY } from "./UIScene";
 
 // Tiny Dungeon art (Kenney, CC0). The packed sheet is 16x16 tiles, 12 columns,
 // no spacing, so a tile's frame index = row * 12 + column. See ATTRIBUTION.md.
@@ -168,6 +168,16 @@ const CHEST_LOCKED_TINT = 0x70707a; // dimmed while sealed; clears on unlock
 // multiplier (×1 calm → ×max at full heat); the server owns the actual scoring.
 const SCORE_MULT_MAX = 3;
 
+// --- Collectible bomb (M10) --------------------------------------------
+// The bomb art is the Tiny Town sheet (TOWN_KEY), frame 105. The server owns the
+// fuse, blast, and stun; these mirror its tuning only to drive client feedback
+// (the warning flash, the explosion ring size, the stun tint on mobs).
+const FRAME_BOMB = 105; // Tiny Town bomb tile
+const BOMB_DEPTH = 5; // sits at loot level
+const BOMB_FUSE = 1.2; // s — mirrors server BOMB_FUSE (warning-flash timing)
+const BOMB_BLAST_RADIUS = 45; // px — mirrors server BOMB_BLAST_RADIUS (explosion ring)
+const BOMB_STUN_TINT = 0x6fb7ff; // cyan wash on stunned mobs
+
 /** Shapes decoded on the client (mirror the server schema). */
 interface PlayerView {
   x: number;
@@ -178,6 +188,7 @@ interface PlayerView {
   hp: number;
   maxHp: number;
   healCharges: number; // stacked heal potions on hand
+  bombs: number; // carried bombs (M10)
   attackBuff: number; // seconds remaining (> 0 = active)
   defenseBuff: number;
   weapon: string; // equipped weapon name backing the attack buff (HUD icon); "" when none
@@ -195,6 +206,7 @@ interface MobView {
   maxHp: number;
   kind: string;
   attackTick: number; // bumps each time the mob lands a hit (strike animation cue)
+  stunned: boolean; // frozen by a bomb blast (M10) — rendered with a cyan wash
 }
 
 interface LootView {
@@ -230,6 +242,12 @@ interface CrateView {
   maxHp: number;
 }
 
+interface BombView {
+  x: number;
+  y: number;
+  fuse: number; // seconds left until detonation (drives the warning flash)
+}
+
 interface MapMessage {
   tile: number;
   width: number;
@@ -262,6 +280,7 @@ interface MobEntity {
   maxHp: number;
   baseScale: number; // sprite scale at rest, so the strike pop can return to it
   attackTick: number; // last-seen server strike counter
+  stunned: boolean; // last-seen stun state, so we only re-tint on the transition
 }
 
 interface LootEntity {
@@ -284,6 +303,11 @@ interface ChestEntity {
   maxHp: number;
 }
 
+interface BombEntity {
+  sprite: Phaser.GameObjects.Image;
+  glow: Phaser.GameObjects.Arc; // pulsing warning aura, accelerated by the fuse
+}
+
 interface InputState {
   up: boolean;
   down: boolean;
@@ -298,6 +322,7 @@ export class GameScene extends Phaser.Scene {
   private loot = new Map<string, LootEntity>();
   private chests = new Map<string, ChestEntity>(); // per-floor vault (one entry)
   private crates = new Map<string, Phaser.GameObjects.Image>(); // breakable props
+  private bombs = new Map<string, BombEntity>(); // placed, ticking bombs (M10)
   private markers = new Map<string, Phaser.GameObjects.Image>(); // server-owned tombstones
   private localId = "";
 
@@ -333,6 +358,7 @@ export class GameScene extends Phaser.Scene {
     d: Phaser.Input.Keyboard.Key;
     space: Phaser.Input.Keyboard.Key;
     q: Phaser.Input.Keyboard.Key;
+    e: Phaser.Input.Keyboard.Key;
   };
   private lastSent: InputState = { up: false, down: false, left: false, right: false };
   private lastAttackAt = 0; // client-side attack throttle (ms)
@@ -340,6 +366,7 @@ export class GameScene extends Phaser.Scene {
   private lastHealAt = 0; // client-side heal throttle (ms)
   private healRequested = false; // set by the touch heal button (UIScene)
   private localHealCharges = 0; // mirror of the local hero's heal stack (revive-hint gate)
+  private bombRequested = false; // set by the touch bomb button (UIScene)
 
   constructor() {
     super("game");
@@ -386,6 +413,7 @@ export class GameScene extends Phaser.Scene {
       d: kb.addKey(Phaser.Input.Keyboard.KeyCodes.D),
       space: kb.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE),
       q: kb.addKey(Phaser.Input.Keyboard.KeyCodes.Q),
+      e: kb.addKey(Phaser.Input.Keyboard.KeyCodes.E),
     };
     kb.addCapture("SPACE"); // don't let Space scroll/trigger page defaults
 
@@ -396,9 +424,11 @@ export class GameScene extends Phaser.Scene {
     // which fire game-level events so UIScene stays Colyseus-free.
     this.game.events.on("attack", this.onAttackRequest, this);
     this.game.events.on("useHeal", this.onHealRequest, this);
+    this.game.events.on("useBomb", this.onBombRequest, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.events.off("attack", this.onAttackRequest, this);
       this.game.events.off("useHeal", this.onHealRequest, this);
+      this.game.events.off("useBomb", this.onBombRequest, this);
     });
 
     // Run-stakes buttons (plain DOM, outside the canvas). The server validates
@@ -433,6 +463,10 @@ export class GameScene extends Phaser.Scene {
 
   private onHealRequest() {
     this.healRequested = true;
+  }
+
+  private onBombRequest() {
+    this.bombRequested = true;
   }
 
   /**
@@ -486,6 +520,7 @@ export class GameScene extends Phaser.Scene {
       loot: Map<string, LootView>;
       chests: Map<string, ChestView>;
       crates: Map<string, CrateView>;
+      bombs: Map<string, BombView>;
       markers: Map<string, MarkerView>;
       phase: string;
     };
@@ -552,6 +587,13 @@ export class GameScene extends Phaser.Scene {
             m.attackTick = mob.attackTick;
             this.mobStrike(m);
           }
+          // Bomb stun (M10): wash the mob cyan while frozen, clear it when it wears
+          // off. Only on the transition so the strike-flash tween isn't fought.
+          if (mob.stunned !== m.stunned) {
+            m.stunned = mob.stunned;
+            if (mob.stunned) m.sprite.setTint(BOMB_STUN_TINT);
+            else m.sprite.clearTint();
+          }
         }
       });
     });
@@ -592,6 +634,14 @@ export class GameScene extends Phaser.Scene {
         onComplete: () => img.destroy(),
       });
     });
+
+    // Placed bombs (M10): a ticking sprite with a warning flash that quickens as
+    // the fuse runs down. onRemove is the detonation — explosion burst + a kick.
+    $(state).bombs.onAdd((b: BombView, id: string) => {
+      this.addBomb(b, id);
+      $(b).onChange(() => this.updateBomb(b, id));
+    });
+    $(state).bombs.onRemove((_b: BombView, id: string) => this.removeBomb(id));
 
     // Death markers fire onAdd for ones laid before we joined, so late-joiners see
     // the party's history; the server caps the count and culls oldest-first.
@@ -686,7 +736,9 @@ export class GameScene extends Phaser.Scene {
       maxHp: mob.maxHp,
       baseScale: sprite.scaleX, // set by setDisplaySize above
       attackTick: mob.attackTick, // seed so we don't flash on spawn
+      stunned: mob.stunned, // seed so an already-stunned mob renders washed on spawn
     });
+    if (mob.stunned) sprite.setTint(BOMB_STUN_TINT);
   }
 
   private removeMob(id: string) {
@@ -741,6 +793,73 @@ export class GameScene extends Phaser.Scene {
       },
     });
     this.loot.delete(id);
+  }
+
+  // --- Bomb rendering (M10) ----------------------------------------------
+
+  /**
+   * A placed bomb: the Tiny Town bomb sprite plus a warning glow sized to the
+   * actual blast radius (so the danger footprint is telegraphed). updateBomb
+   * quickens the flash as the fuse runs out; removeBomb plays the detonation.
+   */
+  private addBomb(b: BombView, id: string) {
+    const glow = this.add
+      .circle(b.x, b.y, BOMB_BLAST_RADIUS, 0xff5a3c, 0.18)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(LOOT_GLOW_DEPTH);
+    const sprite = this.add
+      .image(b.x, b.y, TOWN_KEY, FRAME_BOMB)
+      .setDisplaySize(TILE, TILE)
+      .setDepth(BOMB_DEPTH);
+    this.bombs.set(id, { sprite, glow });
+  }
+
+  /** Pulse the bomb's warning flash, faster the closer the fuse is to zero. */
+  private updateBomb(b: BombView, id: string) {
+    const e = this.bombs.get(id);
+    if (!e) return;
+    const frac = Phaser.Math.Clamp(b.fuse / BOMB_FUSE, 0, 1);
+    const freq = 6 + (1 - frac) * 22; // blink accelerates toward detonation
+    const on = Math.sin((BOMB_FUSE - b.fuse) * freq) > 0;
+    e.glow.setScale(1 + (1 - frac) * 0.5).setAlpha(on ? 0.55 : 0.18);
+    e.sprite.setTint(on ? 0xffffff : 0xff5a3c); // strobe to a hot red-orange
+  }
+
+  /** Detonation: tear down the bomb entity and play the blast at its spot. */
+  private removeBomb(id: string) {
+    const e = this.bombs.get(id);
+    if (!e) return;
+    this.bombs.delete(id);
+    const x = e.sprite.x;
+    const y = e.sprite.y;
+    e.sprite.destroy();
+    e.glow.destroy();
+    this.playExplosion(x, y);
+  }
+
+  /** A one-shot blast: shockwave ring + white core + a short camera kick. */
+  private playExplosion(x: number, y: number) {
+    const ring = this.add
+      .circle(x, y, BOMB_BLAST_RADIUS, 0xffb15a, 0.45)
+      .setStrokeStyle(3, 0xffd089, 0.9)
+      .setDepth(15);
+    this.tweens.add({
+      targets: ring,
+      scale: 1.6,
+      alpha: 0,
+      duration: 280,
+      ease: "Quad.easeOut",
+      onComplete: () => ring.destroy(),
+    });
+    const core = this.add.circle(x, y, BOMB_BLAST_RADIUS * 0.5, 0xffffff, 0.85).setDepth(16);
+    this.tweens.add({
+      targets: core,
+      scale: 1.8,
+      alpha: 0,
+      duration: 180,
+      onComplete: () => core.destroy(),
+    });
+    this.cameras.main.shake(180, 0.006);
   }
 
   // --- Vault chest rendering ---------------------------------------------
@@ -1009,6 +1128,16 @@ export class GameScene extends Phaser.Scene {
     this.room.send("useHeal"); // server no-ops if there's no charge / we're dead
   }
 
+  /** Place a carried bomb (E key or the touch button). Inventory-gated server-side. */
+  private handleBombInput() {
+    const want = Phaser.Input.Keyboard.JustDown(this.keys.e) || this.bombRequested;
+    this.bombRequested = false;
+    if (!want || !this.room) return;
+    const me = this.entities.get(this.localId);
+    if (me && me.hp <= 0) return; // no placing while down
+    this.room.send("useBomb"); // server no-ops if we hold no bombs
+  }
+
   /** Show/colour the buff aura under a hero from its active buffs. */
   private updateAura(e: Entity, time: number) {
     const atk = e.atkBuff > 0;
@@ -1078,6 +1207,18 @@ export class GameScene extends Phaser.Scene {
     if (heal) heal.classList.toggle("empty", p.healCharges <= 0);
     if (heal) heal.title = p.healCharges > 0 ? `${p.healCharges} heal(s) — press Q` : "no heals";
     if (healN) healN.textContent = String(p.healCharges);
+
+    // Carried bombs (M10): a chip with the stack count, shown only while holding
+    // at least one. Also published to the registry so UIScene's contextual mobile
+    // bomb button can show/hide without touching Colyseus.
+    const bomb = document.getElementById("hud-bomb");
+    const bombN = document.getElementById("hud-bomb-n");
+    if (bomb) {
+      bomb.hidden = p.bombs <= 0;
+      bomb.title = `${p.bombs} bomb(s) — press E`;
+    }
+    if (bombN) bombN.textContent = String(p.bombs);
+    this.registry.set(BOMB_COUNT_KEY, p.bombs);
 
     // Lives: ♥×N near the run HUD; greyed at 0 (revive-only).
     const lives = document.getElementById("run-lives");
@@ -1807,6 +1948,7 @@ export class GameScene extends Phaser.Scene {
     this.sendInput();
     this.handleAttackInput(time);
     this.handleHealInput(time);
+    this.handleBombInput();
 
     // Smoothly interpolate every entity toward its authoritative position.
     // Frame-rate independent lerp factor.
