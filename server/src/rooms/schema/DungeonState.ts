@@ -21,6 +21,9 @@ export class Player extends Schema {
   // on demand). attackBuff/defenseBuff are seconds remaining on the instant
   // pickup buffs (> 0 = active); they drive the HUD + hero feedback.
   @type("number") healCharges: number = 0;
+  // Carried bombs (M10): stockpiled like heal potions, placed with the E key /
+  // contextual mobile button. Capped (see MAX_BOMBS). Drives the HUD bomb chip.
+  @type("uint8") bombs: number = 0;
   @type("number") attackBuff: number = 0;
   @type("number") defenseBuff: number = 0;
   // Name of the weapon backing the active attack buff (see WEAPONS in tuning.ts),
@@ -60,6 +63,22 @@ export class Mob extends Schema {
   // the change to fire a one-shot strike animation — cheaper than a ticking
   // timer, which would re-encode every tick for every attacking mob.
   @type("uint8") attackTick: number = 0;
+  // Frozen by a bomb blast (M10): no movement or attacks while true. Synced so
+  // clients can tint stunned mobs; the server owns the timer (see MobAI). Toggled
+  // only on the transition, not per-tick, to keep it off the wire when unchanged.
+  @type("boolean") stunned: boolean = false;
+}
+
+/**
+ * A placed, ticking bomb (M10). Lives on the floor for a short fuse, then the
+ * server detonates it (local blast + map-wide mob stun) and removes it — the
+ * client plays the explosion on onRemove. `fuse` is synced so the client can
+ * accelerate its warning flash as detonation nears.
+ */
+export class Bomb extends Schema {
+  @type("number") x: number = 0; // pixel center
+  @type("number") y: number = 0;
+  @type("number") fuse: number = 0; // seconds remaining until it blows
 }
 
 /** A loot drop sitting on the floor until a player walks over it. */
@@ -152,4 +171,6 @@ export class DungeonState extends Schema {
   // Breakable props (crates, barrels, kegs) — synced so destruction is
   // authoritative and late-joiners don't see already-broken ones.
   @type({ map: Crate }) crates = new MapSchema<Crate>();
+  // Placed, ticking bombs (M10) — usually empty; a handful at most while fuses run.
+  @type({ map: Bomb }) bombs = new MapSchema<Bomb>();
 }

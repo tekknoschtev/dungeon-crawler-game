@@ -8,6 +8,7 @@ import {
   rollWeapon,
   rollMobKind,
   applyLootEffect,
+  crateBombChance,
   applyKnockback,
   playerAttackDamage,
   mobDamageAfterDefense,
@@ -37,6 +38,7 @@ import {
   MOB_DAMAGE,
   BUFF_DURATION,
   MAX_HEAL_CHARGES,
+  MAX_BOMBS,
   RESPAWN_DELAYS,
   SCORE_PER_KILL,
   SCORE_MULT_MAX,
@@ -53,7 +55,7 @@ import {
 /** A fresh, unbuffed loot target + combat buffs pair. */
 function freshTarget(): { t: LootTarget; b: LootBuffs } {
   return {
-    t: { attackBuff: 0, defenseBuff: 0, healCharges: 0, weapon: "" },
+    t: { attackBuff: 0, defenseBuff: 0, healCharges: 0, bombs: 0, weapon: "" },
     b: { attackMult: 1, defenseReduce: 0, knockback: 0 },
   };
 }
@@ -189,6 +191,23 @@ describe("applyLootEffect", () => {
     t.healCharges = MAX_HEAL_CHARGES;
     expect(applyLootEffect(t, b, { rarity: "common", category: "heal" })).toBe(false);
     expect(t.healCharges).toBe(MAX_HEAL_CHARGES); // unchanged
+  });
+
+  it("banks a bomb when there is room, and leaves it once the carry cap is hit", () => {
+    const { t, b } = freshTarget();
+    expect(applyLootEffect(t, b, { rarity: "common", category: "bomb" })).toBe(true);
+    expect(t.bombs).toBe(1);
+    t.bombs = MAX_BOMBS;
+    expect(applyLootEffect(t, b, { rarity: "common", category: "bomb" })).toBe(false);
+    expect(t.bombs).toBe(MAX_BOMBS); // unchanged — left on the floor
+  });
+});
+
+describe("crateBombChance (M10 rubber-band)", () => {
+  it("is the base on floor 1 and climbs with depth, capped", () => {
+    expect(crateBombChance(1, 0.12, 0.02, 0.35)).toBeCloseTo(0.12); // no bonus on 1
+    expect(crateBombChance(5, 0.12, 0.02, 0.35)).toBeCloseTo(0.2); // +0.02 * 4
+    expect(crateBombChance(100, 0.12, 0.02, 0.35)).toBe(0.35); // clamped at the cap
   });
 });
 

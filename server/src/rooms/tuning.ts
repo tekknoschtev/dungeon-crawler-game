@@ -173,6 +173,28 @@ export const CRATE_RADIUS = 7;           // px hit detection (added to PLAYER_AT
 export const CRATE_SCORE_BONUS = 5;      // direct score awarded to the breaker
 export const CRATE_POTION_CHANCE = 0.4;  // 40% chance of a common heal potion drop
 
+// --- Collectible bomb (M10) --------------------------------------------
+// A deep-floor comeback tool. Broken crates have a chance (rubber-banded deeper,
+// so bombs show up when the floor is drowning you) to drop a bomb the player
+// carries and places with the E key (or a contextual mobile button). On a short
+// fuse it does two things at once: a LOCAL blast — radius damage + knockback that
+// also hurts the placer if they're still inside (the skill/risk) — and a MAP-WIDE
+// stun freezing every mob for a beat (the relief: reposition, revive, or bolt for
+// the stairs while they're stunned). Bomb kills route through killMob, so they
+// score to the placer and feed the M9 spawn lull for free. A deliberate exception
+// to the "immediate-use loot / no new buttons" rules (see roadmap M10); the carry
+// count mirrors MAX_HEAL_CHARGES and the mobile button is contextual/transient.
+export const MAX_BOMBS = 2; // carry cap (stockpile, like heal charges)
+export const CRATE_BOMB_CHANCE_BASE = 0.12; // floor-1 chance a broken crate drops a bomb
+export const CRATE_BOMB_CHANCE_DEPTH = 0.02; // +chance per floor below 1 (rubber-band)
+export const CRATE_BOMB_CHANCE_MAX = 0.35; // ceiling so deep floors aren't flooded with bombs
+export const BOMB_FUSE = 1.2; // s from placement to detonation (time to step clear)
+export const BOMB_BLAST_RADIUS = 45; // px — radius of the damaging/knockback blast
+export const BOMB_BLAST_DAMAGE = 60; // damage to mobs AND players caught in the blast
+export const BOMB_KNOCKBACK = 48; // px a mob in the blast is shoved outward from the bomb
+export const BOMB_STUN = 2.5; // s every mob on the map is frozen on detonation
+export const BOMB_FRAME = 105; // Tiny Town sheet index the client renders (bomb tile)
+
 // --- Vault chest (M4) --------------------------------------------------
 // One vault per floor: visible from arrival, sealed behind a timed door that
 // opens once the floor's heat is already spicy. Cracking it open under fire pays
