@@ -76,9 +76,10 @@ const DECOR_DEPTH = 3; // markers: above floor (mapLayer=0), below loot (5)
 // A hero's light: full brightness within INNER, fading linearly to black at OUTER.
 // Sized against CAMERA_ZOOM=2 (visible world ≈400px wide) so the bubble fills a
 // good chunk of the view while leaving dark margins to creep into.
-const LIGHT_INNER = 3.5 * 16; // px fully lit around a hero
+const LIGHT_INNER = 2 * 16; // px fully lit around a hero (small core → most of the bubble is a gradient)
 const LIGHT_OUTER = 6.5 * 16; // px where the light fades to nothing
-const EXPLORED_DIM = 0.32; // alpha of remembered geometry once out of the light
+const EXPLORED_DIM = 0.075; // alpha of remembered geometry once out of the light: a faint ghost
+// of the layout — just enough to keep your bearings without lifting the oppressive dark.
 const LIGHT_VISIBLE_AT = 0.04; // min light for a mob/loot/crate to show (the ambush edge)
 const BACKDROP_DEPTH = -10; // black void behind the map on dark floors
 // Two gravestone shapes for death markers — a rounded headstone (#64) and a

@@ -157,6 +157,9 @@ export const MAX_HEAL_CHARGES = 5; // how many heal potions a hero can stockpile
 export const SCORE_PER_KILL = 10; // base points per mob (before depth + multiplier)
 export const SCORE_DEPTH_SCALE = 0.1; // +10% kill value per floor below 1 (tougher = worth more)
 export const SCORE_MULT_MAX = 3; // heat 1 ⇒ ×3 — the dwell payoff ceiling (headline knob)
+// Dark floors are higher-risk (you're blind, the mobs aren't), so everything you
+// earn on one pays more — the reward that flips "ugh, dark" into "ooh, dark."
+export const DARK_FLOOR_SCORE_MULT = 1.5;
 export const SCORE_DEPTH_BONUS = 100; // × depth, granted + banked on each descend
 // Points a picked-up drop is worth by rarity (before the multiplier). Tuned against
 // RARITIES' drop weights so a legendary reads as a jackpot, not just a bigger common.

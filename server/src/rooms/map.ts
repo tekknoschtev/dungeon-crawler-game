@@ -374,8 +374,10 @@ function carveVault(
 
 /**
  * Build a dungeon from a seed. The same seed always yields the same layout.
+ * `depth` only gates the lighting roll (floor 1 is never dark — see below); it
+ * does not affect geometry, so the same seed yields the same layout at any depth.
  */
-export function loadMap(seed: number): LoadedMap {
+export function loadMap(seed: number, depth = 1): LoadedMap {
   const rand = mulberry32(seed);
   const randInt = (min: number, max: number) =>
     min + Math.floor(rand() * (max - min + 1));
@@ -475,8 +477,10 @@ export function loadMap(seed: number): LoadedMap {
     : null;
 
   // Lighting mode — rolled last so it never perturbs the geometry RNG above (a
-  // given seed keeps its exact layout). Independent of the preset.
-  const lighting: Lighting = rand() < DARK_CHANCE ? "dark" : "bright";
+  // given seed keeps its exact layout). Independent of the preset. Floor 1 is
+  // always bright: the game should be playable on sight, and opening on a dark
+  // floor (with no tutorial) would read as a turn-off rather than a twist.
+  const lighting: Lighting = depth > 1 && rand() < DARK_CHANCE ? "dark" : "bright";
 
   return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props, exit, vault, preset: preset.name, lighting };
 }
