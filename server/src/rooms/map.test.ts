@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { loadMap, MAP_W, MAP_H, TILE } from "./map";
+import { loadMap, MAP_W, MAP_H, TILE, LIGHTING } from "./map";
 
 /** Flood-fill the floor (0) cells reachable from a start tile; returns the count. */
 function reachableFloorCount(grid: number[][], startX: number, startY: number): number {
@@ -118,6 +118,19 @@ describe("loadMap", () => {
 
   it("is deterministic in props for a given seed", () => {
     expect(loadMap(2024).props).toEqual(loadMap(2024).props);
+  });
+
+  it("rolls a known lighting mode, deterministic per seed", () => {
+    for (const seed of [1, 2, 3, 42, 99, 555, 777, 2024, 31337]) {
+      const lighting = loadMap(seed).lighting;
+      expect(LIGHTING).toContain(lighting);
+      expect(loadMap(seed).lighting).toBe(lighting); // same seed → same mode
+    }
+  });
+
+  it("produces both bright and dark floors across seeds", () => {
+    const modes = new Set(Array.from({ length: 60 }, (_, s) => loadMap(s).lighting));
+    expect(modes).toEqual(new Set(["bright", "dark"]));
   });
 
   it("leaves no wall nub touching floor on 3+ orthogonal sides", () => {
