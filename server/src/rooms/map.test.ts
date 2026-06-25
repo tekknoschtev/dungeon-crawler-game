@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { loadMap, MAP_W, MAP_H, TILE } from "./map";
+import { loadMap, MAP_W, MAP_H, TILE, LIGHTING } from "./map";
 
 /** Flood-fill the floor (0) cells reachable from a start tile; returns the count. */
 function reachableFloorCount(grid: number[][], startX: number, startY: number): number {
@@ -118,6 +118,35 @@ describe("loadMap", () => {
 
   it("is deterministic in props for a given seed", () => {
     expect(loadMap(2024).props).toEqual(loadMap(2024).props);
+  });
+
+  it("rolls a known lighting mode, deterministic per seed", () => {
+    for (const seed of [1, 2, 3, 42, 99, 555, 777, 2024, 31337]) {
+      const lighting = loadMap(seed, 3).lighting;
+      expect(LIGHTING).toContain(lighting);
+      expect(loadMap(seed, 3).lighting).toBe(lighting); // same seed+depth → same mode
+    }
+  });
+
+  it("never makes floor 1 dark (no-tutorial on-ramp)", () => {
+    for (let seed = 0; seed < 80; seed++) {
+      expect(loadMap(seed, 1).lighting).toBe("bright");
+    }
+  });
+
+  it("produces both bright and dark floors deeper than floor 1", () => {
+    const modes = new Set(Array.from({ length: 60 }, (_, s) => loadMap(s, 2).lighting));
+    expect(modes).toEqual(new Set(["bright", "dark"]));
+  });
+
+  it("ignores depth for geometry — only lighting changes", () => {
+    // Same seed at different depths must yield the identical layout (lighting is
+    // rolled last and is the only depth-sensitive output).
+    const a = loadMap(2024, 1);
+    const b = loadMap(2024, 5);
+    expect(a.grid).toEqual(b.grid);
+    expect(a.spawns).toEqual(b.spawns);
+    expect(a.props).toEqual(b.props);
   });
 
   it("leaves no wall nub touching floor on 3+ orthogonal sides", () => {

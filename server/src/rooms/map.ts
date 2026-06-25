@@ -27,6 +27,20 @@ interface FloorPreset {
   propChance: number; // per-tile probability of a prop on a room edge
 }
 
+/**
+ * Per-floor lighting modifier — a GAMEPLAY axis, not cosmetics. "bright" is the
+ * normal fully-lit floor; "dark" floors render only what a hero's light reaches,
+ * so mobs/loot/crates/the ladder stay hidden until approached (the client owns
+ * the actual vision rendering; the server just rolls + announces the mode). Rolled
+ * per floor and sent in the "map" message. Torchlit (static light sources) is a
+ * planned third mode.
+ */
+export const LIGHTING = ["bright", "dark"] as const;
+export type Lighting = (typeof LIGHTING)[number];
+// Roughly one floor in three is dark — frequent enough to matter, rare enough to
+// stay a "change of pace." Tunable; a dev override lives in DungeonRoom.
+const DARK_CHANCE = 0.34;
+
 const PRESETS: readonly FloorPreset[] = [
   // Many small rooms connected by a tangle of corridors. Cramped fights,
   // lots of crates to smash, easy to get lost.
@@ -148,6 +162,8 @@ export interface LoadedMap {
   vault: VaultPlacement | null;
   /** which floor archetype was rolled for this seed (server-side info, not sent to clients) */
   preset: string;
+  /** lighting mode for this floor; sent to clients so they render the vision bubble */
+  lighting: Lighting;
 }
 
 // Prop placement. Props go only on room-edge tiles (exactly one orthogonal wall
@@ -358,8 +374,10 @@ function carveVault(
 
 /**
  * Build a dungeon from a seed. The same seed always yields the same layout.
+ * `depth` only gates the lighting roll (floor 1 is never dark — see below); it
+ * does not affect geometry, so the same seed yields the same layout at any depth.
  */
-export function loadMap(seed: number): LoadedMap {
+export function loadMap(seed: number, depth = 1): LoadedMap {
   const rand = mulberry32(seed);
   const randInt = (min: number, max: number) =>
     min + Math.floor(rand() * (max - min + 1));
@@ -458,5 +476,11 @@ export function loadMap(seed: number): LoadedMap {
     ? { chest: vaultCarve.chest, door: vaultCarve.door }
     : null;
 
-  return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props, exit, vault, preset: preset.name };
+  // Lighting mode — rolled last so it never perturbs the geometry RNG above (a
+  // given seed keeps its exact layout). Independent of the preset. Floor 1 is
+  // always bright: the game should be playable on sight, and opening on a dark
+  // floor (with no tutorial) would read as a turn-off rather than a twist.
+  const lighting: Lighting = depth > 1 && rand() < DARK_CHANCE ? "dark" : "bright";
+
+  return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props, exit, vault, preset: preset.name, lighting };
 }

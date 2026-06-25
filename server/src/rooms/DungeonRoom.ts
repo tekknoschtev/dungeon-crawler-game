@@ -32,6 +32,7 @@ import {
   CRATE_HP,
   CRATE_RADIUS,
   CRATE_SCORE_BONUS,
+  DARK_FLOOR_SCORE_MULT,
   CRATE_POTION_CHANCE,
   BOMB_FUSE,
   BOMB_BLAST_RADIUS,
@@ -312,8 +313,12 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     // Mix baseSeed with depth so each floor has its own reproducible layout.
     const seed = (this.baseSeed ^ Math.imul(depth, 0x9e3779b1)) >>> 0;
     this.state.seed = seed;
-    this.map = loadMap(seed);
-    console.log(`Floor ${depth} — preset: ${this.map.preset} (seed ${seed})`);
+    this.map = loadMap(seed, depth);
+    // Dev/testing override: DUNGEON_LIGHTING=dark|bright forces every floor's mode
+    // so the vision rendering is reproducible without reroll-fishing. Unset in prod.
+    const forced = process.env.DUNGEON_LIGHTING;
+    if (forced === "dark" || forced === "bright") this.map.lighting = forced;
+    console.log(`Floor ${depth} — preset: ${this.map.preset}, lighting: ${this.map.lighting} (seed ${seed})`);
 
     // Bake props into a collision-only grid (walls + prop tiles solid, including
     // breakable ones — they start solid and are removed from collision on break).
@@ -514,7 +519,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     // Points → party, split evenly (the party total rises by ~the chest amount).
     // Each share is rounded so scores stay whole on the HUD (the total can differ
     // from `pts` by < n points — immaterial against a depth-scaled jackpot).
-    const pts = Math.round(chestPoints(this.state.depth) * scoreMultiplier(this.state.heat));
+    const pts = Math.round(chestPoints(this.state.depth) * scoreMultiplier(this.state.heat) * this.floorScoreMult());
     const n = this.state.players.size;
     if (n > 0) {
       const each = Math.round(pts / n);
@@ -559,7 +564,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
 
     // Score bonus to the breaker.
     const breaker = this.state.players.get(breakerId);
-    if (breaker) breaker.score += CRATE_SCORE_BONUS;
+    if (breaker) breaker.score += Math.round(CRATE_SCORE_BONUS * this.floorScoreMult());
 
     // Possible potion drop at the crate's position.
     if (Math.random() < CRATE_POTION_CHANCE) {
@@ -599,6 +604,13 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     }
   }
 
+  /** Extra score multiplier for the current floor — dark floors pay more for the
+   *  risk of fighting blind. Folded into every in-floor score gain (kills, loot,
+   *  chest, crates). */
+  private floorScoreMult(): number {
+    return this.map.lighting === "dark" ? DARK_FLOOR_SCORE_MULT : 1;
+  }
+
   /** The map payload clients render (geometry + static props + the descent exit).
    *  Breakable props are excluded — they're synced via state.crates instead. */
   private mapPayload() {
@@ -609,6 +621,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       grid: this.map.grid,
       props: this.map.props.filter((p) => !p.breakable),
       exit: this.map.exit,
+      lighting: this.map.lighting, // "bright" | "dark" — drives the client vision bubble
     };
   }
 
@@ -908,7 +921,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       // Tougher/deeper kinds are worth more: the kind's base value feeds the
       // depth + heat-multiplier scoring (see MOBS / killScore).
       const base = mobByName(mob.kind).score;
-      killer.score += Math.round(killScore(this.state.depth, base) * scoreMultiplier(this.state.heat));
+      killer.score += Math.round(killScore(this.state.depth, base) * scoreMultiplier(this.state.heat) * this.floorScoreMult());
     }
     this.dropLoot(mob.x, mob.y);
     this.state.mobs.delete(id);
@@ -1103,7 +1116,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
           // Grabbing a drop scores by its rarity, at the floor's live multiplier —
           // except a bomb, which is a carried tool, not a haul (no points).
           if (loot.category !== "bomb") {
-            player.score += Math.round(lootScore(loot.rarity) * scoreMultiplier(this.state.heat));
+            player.score += Math.round(lootScore(loot.rarity) * scoreMultiplier(this.state.heat) * this.floorScoreMult());
           }
           this.state.loot.delete(lid);
         }

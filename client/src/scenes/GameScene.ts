@@ -71,6 +71,17 @@ const WALL_INNER_CORNER: Record<number, number> = {
 const SPECKLE_CHANCE = 0.12; // floor tiles that get the subtle speckle variant
 const PAVED_CHANCE = 0.03; // rarer stone-slab accent tiles
 const DECOR_DEPTH = 3; // markers: above floor (mapLayer=0), below loot (5)
+
+// --- Dark-floor lighting (see updateDarkness) ---------------------------
+// A hero's light: full brightness within INNER, fading linearly to black at OUTER.
+// Sized against CAMERA_ZOOM=2 (visible world ≈400px wide) so the bubble fills a
+// good chunk of the view while leaving dark margins to creep into.
+const LIGHT_INNER = 2 * 16; // px fully lit around a hero (small core → most of the bubble is a gradient)
+const LIGHT_OUTER = 6.5 * 16; // px where the light fades to nothing
+const EXPLORED_DIM = 0.075; // alpha of remembered geometry once out of the light: a faint ghost
+// of the layout — just enough to keep your bearings without lifting the oppressive dark.
+const LIGHT_VISIBLE_AT = 0.04; // min light for a mob/loot/crate to show (the ambush edge)
+const BACKDROP_DEPTH = -10; // black void behind the map on dark floors
 // Two gravestone shapes for death markers — a rounded headstone (#64) and a
 // rectangular slab (#65). Picked deterministically per marker so every client
 // renders the same stone for a given fallen hero.
@@ -257,6 +268,7 @@ interface MapMessage {
   grid: number[][];
   props: { x: number; y: number; frame: number }[]; // static furniture (server-placed)
   exit: { x: number; y: number }; // descent point in TILE coords
+  lighting?: "bright" | "dark"; // "dark" → render the hero-light vision bubble
 }
 
 /** Per-player visual entity on the client. */
@@ -317,6 +329,9 @@ interface InputState {
   right: boolean;
 }
 
+/** Any display object the dark-floor pass can show/hide (images, arcs, text, graphics). */
+type Dimmable = Phaser.GameObjects.GameObject & { setVisible(v: boolean): unknown };
+
 export class GameScene extends Phaser.Scene {
   private room?: Room;
   private entities = new Map<string, Entity>();
@@ -348,6 +363,23 @@ export class GameScene extends Phaser.Scene {
   // True between the server's "descend" signal and the next floor's map arriving,
   // so buildMap knows to fade back in (the descent swaps floors under black).
   private descending = false;
+
+  // --- Dark-floor vision (server-rolled "dark" lighting) ------------------
+  // When true, the floor renders only what a hero's light reaches: geometry you've
+  // walked past lingers dim (explored memory), but mobs/loot/crates stay hidden
+  // until lit. All per-frame, client-only — the server still sends everything.
+  private darkFloor = false;
+  // Every geometry tile (floor/wall/void/prop) with its world-space center, so
+  // updateDarkness can alpha each by distance to the nearest light. Rebuilt per floor.
+  private darkCells: { obj: Phaser.GameObjects.Image; cx: number; cy: number; key: string }[] = [];
+  // Tile keys ("cx,cy") a light has touched this floor — they stay dimly visible after.
+  private explored = new Set<string>();
+  // The ladder is hidden until a hero's light first reaches it, then stays shown.
+  private exitDiscovered = false;
+  // Solid black world backdrop so unlit (alpha-0) tiles read as void, not canvas bg.
+  private darkBackdrop?: Phaser.GameObjects.Rectangle;
+  // Light origins for the current frame (living hero positions), rebuilt each pass.
+  private lightSources: { x: number; y: number }[] = [];
 
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
@@ -1670,6 +1702,22 @@ export class GameScene extends Phaser.Scene {
     // never scrolls past the dungeon edges.
     this.cameras.main.setBounds(0, 0, worldW, worldH);
 
+    // Reset per-floor dark-vision state. On a dark floor we lay a black backdrop
+    // behind the map (so unlit tiles read as void) and collect every geometry cell
+    // for the per-frame light pass; on a bright floor we tear all that down.
+    this.darkFloor = data.lighting === "dark";
+    this.darkCells = [];
+    this.explored.clear();
+    this.exitDiscovered = !this.darkFloor; // bright floors: ladder always shown
+    this.darkBackdrop?.destroy();
+    this.darkBackdrop = undefined;
+    if (this.darkFloor) {
+      this.darkBackdrop = this.add
+        .rectangle(0, 0, worldW, worldH, 0x000000)
+        .setOrigin(0)
+        .setDepth(BACKDROP_DEPTH);
+    }
+
     const grid = data.grid;
     const isWall = (gx: number, gy: number) =>
       gx < 0 || gy < 0 || gx >= data.width || gy >= data.height || grid[gy][gx] === 1;
@@ -1697,6 +1745,7 @@ export class GameScene extends Phaser.Scene {
           // The speckle tile is non-directional debris, so mirror/rotate it for
           // extra variety — turns one frame into 8 orientations with no seams.
           if (floorFrame === FRAME_FLOOR_SPECKLE) this.orientDecor(cell, x, y, t);
+          this.trackDarkCell(cell, x, y, t);
           continue;
         }
 
@@ -1720,7 +1769,7 @@ export class GameScene extends Phaser.Scene {
             (isWall(x - 1, y + 1) ? 0 : DSW);
           frame = WALL_INNER_CORNER[diag] ?? FRAME_VOID;
         }
-        this.addCell(x * t, y * t, t, frame);
+        this.trackDarkCell(this.addCell(x * t, y * t, t, frame), x, y, t);
       }
     }
 
@@ -1728,7 +1777,7 @@ export class GameScene extends Phaser.Scene {
     // the floor; they share the floor's depth (mapLayer) so heroes pass in front
     // — but the server blocks the tile, so heroes never actually overlap them.
     for (const p of data.props) {
-      this.addCell(p.x * t, p.y * t, t, p.frame);
+      this.trackDarkCell(this.addCell(p.x * t, p.y * t, t, p.frame), p.x, p.y, t);
     }
 
     // Descent beacon. buildMap re-runs on every floor (the server re-sends "map"
@@ -1736,6 +1785,11 @@ export class GameScene extends Phaser.Scene {
     this.exitX = data.exit.x * t + t / 2;
     this.exitY = data.exit.y * t + t / 2;
     this.buildExitMarker(t);
+    this.exitMarker?.setVisible(this.exitDiscovered); // hidden on dark floors until found
+
+    // Seed the vision so the very first frame (and the descent fade-in) reveals the
+    // hero's surroundings instead of flashing the whole floor before going dark.
+    if (this.darkFloor) this.updateDarkness();
 
     // If this map arrived from a descent, the swap happened under black. Snap the
     // heroes + camera onto their new spawns so the reveal doesn't show them sliding
@@ -1973,6 +2027,86 @@ export class GameScene extends Phaser.Scene {
     if (tileHash(gx, gy, 4) < 0.5) cell.setFlipX(true);
   }
 
+  /** Remember a geometry tile for the dark-floor light pass (no-op when bright). */
+  private trackDarkCell(obj: Phaser.GameObjects.Image, x: number, y: number, t: number) {
+    if (!this.darkFloor) return;
+    this.darkCells.push({ obj, cx: x * t + t / 2, cy: y * t + t / 2, key: `${x},${y}` });
+  }
+
+  /**
+   * How brightly a world point is lit this frame: 1 inside any hero's INNER radius,
+   * falling linearly to 0 at OUTER, 0 beyond every light. Lights pool — the value
+   * is the max over all sources — so teammates' bubbles add up (and a lone hero on
+   * a dark floor is a small island of sight).
+   */
+  private litAt(x: number, y: number): number {
+    let best = 0;
+    for (const s of this.lightSources) {
+      const dx = x - s.x;
+      const dy = y - s.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= LIGHT_OUTER * LIGHT_OUTER) continue;
+      const d = Math.sqrt(d2);
+      const a = d <= LIGHT_INNER ? 1 : (LIGHT_OUTER - d) / (LIGHT_OUTER - LIGHT_INNER);
+      if (a > best) best = a;
+      if (best >= 1) break;
+    }
+    return best;
+  }
+
+  /**
+   * Show `primary` (+ any `aux` location-tells like a glow or HP bar) only where a
+   * hero's light reaches. When lit we leave `aux` to its own per-frame logic (so we
+   * don't, say, force a chest door back on); when dark we force everything off so
+   * the thing vanishes completely — that's what makes a mob "appear" at the edge.
+   */
+  private gateByLight(x: number, y: number, primary: Dimmable, aux: Dimmable[] = []) {
+    const visible = this.litAt(x, y) > LIGHT_VISIBLE_AT;
+    primary.setVisible(visible);
+    if (!visible) for (const a of aux) a.setVisible(false);
+  }
+
+  /**
+   * Dark-floor render pass (called last in update()). Geometry fades by distance to
+   * the nearest hero light and lingers dim once explored; mobs/loot/crates/bombs/
+   * markers/the vault hide until lit; the ladder reveals once found and stays shown.
+   * Heroes themselves are the light sources, so they're never gated.
+   */
+  private updateDarkness() {
+    // Living heroes are the lights. A downed hero's light goes out (raising the
+    // stakes of a wipe in the dark) but we keep at least one source so a solo
+    // player who just went down isn't plunged into total black mid-respawn.
+    const all = [...this.entities.values()];
+    const lit = all.filter((e) => !e.downed);
+    this.lightSources = (lit.length ? lit : all).map((e) => ({ x: e.sprite.x, y: e.sprite.y }));
+
+    // Geometry: explored tiles stay >= EXPLORED_DIM; unexplored fade in with the light.
+    for (const c of this.darkCells) {
+      const a = this.litAt(c.cx, c.cy);
+      if (a > LIGHT_VISIBLE_AT) this.explored.add(c.key);
+      c.obj.setAlpha(this.explored.has(c.key) ? Math.max(EXPLORED_DIM, a) : a);
+    }
+
+    // Dynamic entities: hidden unless a light is on them.
+    this.mobs.forEach((m) => this.gateByLight(m.sprite.x, m.sprite.y, m.sprite, [m.hpBar]));
+    this.loot.forEach((l) => this.gateByLight(l.sprite.x, l.sprite.y, l.sprite, [l.glow]));
+    this.crates.forEach((c) => this.gateByLight(c.x, c.y, c));
+    this.markers.forEach((m) => this.gateByLight(m.x, m.y, m));
+    this.bombs.forEach((b) => this.gateByLight(b.sprite.x, b.sprite.y, b.sprite, [b.glow]));
+    this.chests.forEach((ch) => {
+      const aux: Dimmable[] = [ch.glow, ch.countdown, ch.hpBar];
+      if (ch.door) aux.push(ch.door);
+      if (ch.seal) aux.push(ch.seal);
+      this.gateByLight(ch.worldX, ch.worldY, ch.sprite, aux);
+    });
+
+    // The ladder: hidden until a hero's light first reaches it, then it stays.
+    if (!this.exitDiscovered && this.litAt(this.exitX, this.exitY) > LIGHT_VISIBLE_AT) {
+      this.exitDiscovered = true;
+      this.exitMarker?.setVisible(true);
+    }
+  }
+
   update(time: number, delta: number) {
     this.sendInput();
     this.handleAttackInput(time);
@@ -2000,6 +2134,9 @@ export class GameScene extends Phaser.Scene {
     this.updateExitNudge();
     this.updateChestNudge();
     this.updateReviveHint();
+    // Run last so it has final say over what's visible this frame (it overrides the
+    // per-entity show/hide above for anything outside the light). No-op when bright.
+    if (this.darkFloor) this.updateDarkness();
   }
 
   private sendInput() {
