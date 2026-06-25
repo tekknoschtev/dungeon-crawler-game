@@ -758,10 +758,14 @@ export class GameScene extends Phaser.Scene {
     this.mobs.delete(id);
   }
 
-  /** Sheet frame for a drop: the weapon's icon for attack, the shield for defense, else the potion. */
-  private lootFrame(l: LootView): number {
-    if (l.category === "attack") return WEAPON_FRAMES[l.variant] ?? CATEGORY_FRAME.attack;
-    return CATEGORY_FRAME[l.category] ?? CATEGORY_FRAME.heal;
+  /** Sheet + frame for a drop: bombs come off the Tiny Town sheet (matching the
+   *  placed-bomb sprite); everything else is a Tiny Dungeon icon — the weapon for
+   *  attack, the shield for defense, else the potion. */
+  private lootSprite(l: LootView): { texture: string; frame: number } {
+    if (l.category === "bomb") return { texture: TOWN_KEY, frame: FRAME_BOMB };
+    if (l.category === "attack")
+      return { texture: TILES_KEY, frame: WEAPON_FRAMES[l.variant] ?? CATEGORY_FRAME.attack };
+    return { texture: TILES_KEY, frame: CATEGORY_FRAME[l.category] ?? CATEGORY_FRAME.heal };
   }
 
   private addLoot(l: LootView, id: string) {
@@ -770,8 +774,9 @@ export class GameScene extends Phaser.Scene {
       .circle(l.x, l.y, 9, color, 0.5)
       .setBlendMode(Phaser.BlendModes.ADD)
       .setDepth(LOOT_GLOW_DEPTH);
+    const art = this.lootSprite(l);
     const sprite = this.add
-      .image(l.x, l.y, TILES_KEY, this.lootFrame(l))
+      .image(l.x, l.y, art.texture, art.frame)
       .setDisplaySize(TILE, TILE)
       .setDepth(LOOT_DEPTH);
     // Gentle pulse so drops read as "shiny", brighter the rarer they are.
