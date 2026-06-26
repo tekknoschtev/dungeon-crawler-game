@@ -33,6 +33,7 @@ import {
   CRATE_RADIUS,
   CRATE_SCORE_BONUS,
   DARK_FLOOR_SCORE_MULT,
+  TORCHLIT_FLOOR_SCORE_MULT,
   CRATE_POTION_CHANCE,
   BOMB_FUSE,
   BOMB_BLAST_RADIUS,
@@ -313,11 +314,14 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     // Mix baseSeed with depth so each floor has its own reproducible layout.
     const seed = (this.baseSeed ^ Math.imul(depth, 0x9e3779b1)) >>> 0;
     this.state.seed = seed;
-    this.map = loadMap(seed, depth);
-    // Dev/testing override: DUNGEON_LIGHTING=dark|bright forces every floor's mode
-    // so the vision rendering is reproducible without reroll-fishing. Unset in prod.
+    // Dev/testing override: DUNGEON_LIGHTING=dark|bright|torchlit forces every
+    // floor's mode so the vision rendering is reproducible without reroll-fishing.
+    // Threaded into loadMap so forcing torchlit actually generates its torches +
+    // secrets (not just the render flag). Unset in prod.
     const forced = process.env.DUNGEON_LIGHTING;
-    if (forced === "dark" || forced === "bright") this.map.lighting = forced;
+    const forcedLighting =
+      forced === "dark" || forced === "bright" || forced === "torchlit" ? forced : undefined;
+    this.map = loadMap(seed, depth, forcedLighting);
     console.log(`Floor ${depth} — preset: ${this.map.preset}, lighting: ${this.map.lighting} (seed ${seed})`);
 
     // Bake props into a collision-only grid (walls + prop tiles solid, including
@@ -385,6 +389,13 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       player.y = spawn.y;
       i++;
     });
+
+    // Torchlit secrets: a loose bonus drop waiting in each shadow pocket between
+    // the torches. The position is server-fixed (loadMap); the contents roll like
+    // any drop. Hidden-until-lit falls out of the dark-render path on the client.
+    for (const s of this.map.secretLoot) {
+      this.dropLoot(s.x * TILE + TILE / 2, s.y * TILE + TILE / 2);
+    }
 
     // Seed the calm starting population so the floor isn't empty on arrival.
     const target = targetMobCount(0, depth);
@@ -608,7 +619,9 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
    *  risk of fighting blind. Folded into every in-floor score gain (kills, loot,
    *  chest, crates). */
   private floorScoreMult(): number {
-    return this.map.lighting === "dark" ? DARK_FLOOR_SCORE_MULT : 1;
+    if (this.map.lighting === "dark") return DARK_FLOOR_SCORE_MULT;
+    if (this.map.lighting === "torchlit") return TORCHLIT_FLOOR_SCORE_MULT;
+    return 1;
   }
 
   /** The map payload clients render (geometry + static props + the descent exit).
@@ -621,7 +634,8 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       grid: this.map.grid,
       props: this.map.props.filter((p) => !p.breakable),
       exit: this.map.exit,
-      lighting: this.map.lighting, // "bright" | "dark" — drives the client vision bubble
+      lighting: this.map.lighting, // "bright" | "dark" | "torchlit" — drives the client vision
+      torches: this.map.torches, // wall-torch tiles (torchlit floors only; [] otherwise)
     };
   }
 

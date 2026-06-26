@@ -134,19 +134,21 @@ describe("loadMap", () => {
     }
   });
 
-  it("produces both bright and dark floors deeper than floor 1", () => {
-    const modes = new Set(Array.from({ length: 60 }, (_, s) => loadMap(s, 2).lighting));
-    expect(modes).toEqual(new Set(["bright", "dark"]));
+  it("produces every lighting mode deeper than floor 1", () => {
+    const modes = new Set(Array.from({ length: 120 }, (_, s) => loadMap(s, 2).lighting));
+    expect(modes).toEqual(new Set(["bright", "dark", "torchlit"]));
   });
 
-  it("ignores depth for geometry — only lighting changes", () => {
-    // Same seed at different depths must yield the identical layout (lighting is
-    // rolled last and is the only depth-sensitive output).
+  it("ignores depth for geometry — only lighting (and its torchlit secrets) changes", () => {
+    // Same seed at different depths must yield the identical GEOMETRY (grid +
+    // spawns are rolled before the depth-sensitive lighting roll). Props can differ
+    // only because torchlit floors seed secret caches; force the same mode and the
+    // full prop layout matches across depths too.
     const a = loadMap(2024, 1);
     const b = loadMap(2024, 5);
     expect(a.grid).toEqual(b.grid);
     expect(a.spawns).toEqual(b.spawns);
-    expect(a.props).toEqual(b.props);
+    expect(loadMap(2024, 1, "bright").props).toEqual(loadMap(2024, 5, "bright").props);
   });
 
   it("leaves no wall nub touching floor on 3+ orthogonal sides", () => {
@@ -242,5 +244,106 @@ describe("vault chamber", () => {
 
   it("is deterministic in the vault for a given seed", () => {
     expect(loadMap(2024).vault).toEqual(loadMap(2024).vault);
+  });
+});
+
+describe("torchlit floors", () => {
+  const SEEDS = [1, 2, 3, 42, 99, 555, 777, 2024, 31337];
+  const SECRET_DARK_D2 = 5 * 5; // SECRET_DARK_THRESHOLD² (tiles)
+  const torchlit = (seed: number) => loadMap(seed, 2, "torchlit");
+
+  it("rolls torchlit among the deeper-floor modes (deterministic per seed)", () => {
+    const modes = new Set(Array.from({ length: 120 }, (_, s) => loadMap(s, 2).lighting));
+    expect(modes.has("torchlit")).toBe(true);
+    // The forced mode wins and is reproducible.
+    expect(loadMap(2024, 1, "torchlit").lighting).toBe("torchlit");
+  });
+
+  it("places torches only on front-facing walls (floor to the south, rock elsewhere)", () => {
+    const isFloor = (grid: number[][], x: number, y: number) =>
+      x >= 0 && y >= 0 && x < MAP_W && y < MAP_H && grid[y][x] === 0;
+    let total = 0;
+    for (const seed of SEEDS) {
+      const { grid, torches } = torchlit(seed);
+      total += torches.length;
+      for (const t of torches) {
+        expect(grid[t.y][t.x]).toBe(1); // mounted on a wall
+        expect(isFloor(grid, t.x, t.y + 1)).toBe(true); // a visible brick face below
+        expect(isFloor(grid, t.x, t.y - 1)).toBe(false);
+        expect(isFloor(grid, t.x + 1, t.y)).toBe(false);
+        expect(isFloor(grid, t.x - 1, t.y)).toBe(false); // never a side/back/corner wall
+      }
+    }
+    expect(total).toBeGreaterThan(0); // torchlit floors actually carry torches
+  });
+
+  it("is deterministic in torches + secrets for a given seed", () => {
+    expect(torchlit(2024).torches).toEqual(torchlit(2024).torches);
+    expect(torchlit(2024).secretLoot).toEqual(torchlit(2024).secretLoot);
+    expect(torchlit(2024).props).toEqual(torchlit(2024).props);
+  });
+
+  it("carries no torches or secrets on bright/dark floors", () => {
+    for (const mode of ["bright", "dark"] as const) {
+      const m = loadMap(2024, 2, mode);
+      expect(m.torches).toEqual([]);
+      expect(m.secretLoot).toEqual([]);
+    }
+  });
+
+  it("seeds bonus loot on floor tiles, in the shadow far from every torch", () => {
+    let checked = 0;
+    for (const seed of SEEDS) {
+      const { grid, torches, secretLoot } = torchlit(seed);
+      for (const s of secretLoot) {
+        checked++;
+        expect(grid[s.y][s.x]).toBe(0); // a loose drop, on open floor
+        const minD2 = Math.min(...torches.map((t) => (t.x - s.x) ** 2 + (t.y - s.y) ** 2));
+        expect(minD2).toBeGreaterThanOrEqual(SECRET_DARK_D2); // genuinely in shadow
+      }
+    }
+    expect(checked).toBeGreaterThan(0); // some floors place a bonus drop
+  });
+
+  it("adds breakable secret caches beyond the floor's furniture", () => {
+    let grew = 0;
+    for (const seed of SEEDS) {
+      const bright = loadMap(seed, 2, "bright").props.length;
+      const torch = torchlit(seed).props.length;
+      expect(torch).toBeGreaterThanOrEqual(bright); // caches only add props
+      if (torch > bright) grew++;
+    }
+    expect(grew).toBeGreaterThan(0); // at least some floors grow a cache
+  });
+
+  it("keeps the dungeon connected with secret caches treated as solid", () => {
+    const isWall = (grid: number[][], x: number, y: number) =>
+      x < 0 || y < 0 || x >= MAP_W || y >= MAP_H || grid[y][x] === 1;
+    for (const seed of SEEDS) {
+      const { grid, spawns, props } = torchlit(seed);
+      const blocked = new Set(props.map((p) => `${p.x},${p.y}`));
+      expect(blocked.size).toBe(props.length); // no two props (or caches) share a tile
+      for (const p of props) {
+        expect(grid[p.y][p.x]).toBe(0); // every prop on floor
+        const walls =
+          (isWall(grid, p.x, p.y - 1) ? 1 : 0) +
+          (isWall(grid, p.x + 1, p.y) ? 1 : 0) +
+          (isWall(grid, p.x, p.y + 1) ? 1 : 0) +
+          (isWall(grid, p.x - 1, p.y) ? 1 : 0);
+        expect(walls).toBe(1); // a room edge, never a corridor
+      }
+      const start = spawns[0];
+      const seen = new Set<string>();
+      const stack: [number, number][] = [[Math.floor(start.x / TILE), Math.floor(start.y / TILE)]];
+      while (stack.length) {
+        const [x, y] = stack.pop()!;
+        if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) continue;
+        const key = `${x},${y}`;
+        if (grid[y][x] !== 0 || blocked.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+      }
+      expect(seen.size).toBe(totalFloor(grid) - props.length);
+    }
   });
 });

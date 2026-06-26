@@ -82,6 +82,20 @@ const EXPLORED_DIM = 0.075; // alpha of remembered geometry once out of the ligh
 // of the layout — just enough to keep your bearings without lifting the oppressive dark.
 const LIGHT_VISIBLE_AT = 0.04; // min light for a mob/loot/crate to show (the ambush edge)
 const BACKDROP_DEPTH = -10; // black void behind the map on dark floors
+// Static wall torches (torchlit floors): always-on light pools, smaller than a
+// hero's mobile bubble — a fixed sconce lights a room corner, not a whole room.
+// The gaps between them stay dark on purpose (that's where secrets hide).
+const FRAME_TORCH = 125; // Tiny Dungeon item that reads as a torch on a front-facing wall
+const TORCH_LIGHT_INNER = 1 * 16; // px fully lit at the flame
+const TORCH_LIGHT_OUTER = 4.5 * 16; // px the pool reaches (vs a hero's 6.5)
+const TORCH_SPRITE_DEPTH = 2; // the torch sits above the wall it's mounted on
+// Torchlit tiles tint toward this warm amber, blended per-tile (blocky, matching the
+// alpha steps — no smooth glow overlay). Strength scales with the torch's share of a
+// tile's light and caps at TORCH_TINT_MAX so geometry stays readable, just firelit.
+const TORCH_TINT_R = 0xff;
+const TORCH_TINT_G = 0xb0;
+const TORCH_TINT_B = 0x60;
+const TORCH_TINT_MAX = 0.55;
 // Two gravestone shapes for death markers — a rounded headstone (#64) and a
 // rectangular slab (#65). Picked deterministically per marker so every client
 // renders the same stone for a given fallen hero.
@@ -268,7 +282,8 @@ interface MapMessage {
   grid: number[][];
   props: { x: number; y: number; frame: number }[]; // static furniture (server-placed)
   exit: { x: number; y: number }; // descent point in TILE coords
-  lighting?: "bright" | "dark"; // "dark" → render the hero-light vision bubble
+  lighting?: "bright" | "dark" | "torchlit"; // "dark"/"torchlit" → render the vision bubble
+  torches?: { x: number; y: number }[]; // wall-torch tiles (torchlit floors); static light pools
 }
 
 /** Per-player visual entity on the client. */
@@ -378,8 +393,16 @@ export class GameScene extends Phaser.Scene {
   private exitDiscovered = false;
   // Solid black world backdrop so unlit (alpha-0) tiles read as void, not canvas bg.
   private darkBackdrop?: Phaser.GameObjects.Rectangle;
-  // Light origins for the current frame (living hero positions), rebuilt each pass.
-  private lightSources: { x: number; y: number }[] = [];
+  // Light origins for the current frame: hero positions (rebuilt each pass) plus the
+  // floor's static torches. Each carries its own inner/outer radius (a torch pool is
+  // smaller than a hero's bubble) and a `warm` flag (torchlight tints tiles amber).
+  private lightSources: { x: number; y: number; inner: number; outer: number; warm: boolean }[] = [];
+  // Torchlit floors: always-on torch light pools (world coords, offset into the room),
+  // rebuilt per floor. Appended to lightSources every frame so the pools never move.
+  private torchLights: { x: number; y: number; inner: number; outer: number; warm: boolean }[] = [];
+  // Torch sprites and their flicker tweens, torn down per floor.
+  private torchObjs: Phaser.GameObjects.GameObject[] = [];
+  private torchTweens: Phaser.Tweens.Tween[] = [];
 
   private keys!: {
     up: Phaser.Input.Keyboard.Key;
@@ -1705,7 +1728,10 @@ export class GameScene extends Phaser.Scene {
     // Reset per-floor dark-vision state. On a dark floor we lay a black backdrop
     // behind the map (so unlit tiles read as void) and collect every geometry cell
     // for the per-frame light pass; on a bright floor we tear all that down.
-    this.darkFloor = data.lighting === "dark";
+    // Both "dark" and "torchlit" render through the vision path (black backdrop,
+    // hidden-until-lit entities, explored ghosting). Torchlit just adds static
+    // torch pools on top — so the floor is dark *except* where torches reach.
+    this.darkFloor = data.lighting === "dark" || data.lighting === "torchlit";
     this.darkCells = [];
     this.explored.clear();
     this.exitDiscovered = !this.darkFloor; // bright floors: ladder always shown
@@ -1778,6 +1804,28 @@ export class GameScene extends Phaser.Scene {
     // — but the server blocks the tile, so heroes never actually overlap them.
     for (const p of data.props) {
       this.trackDarkCell(this.addCell(p.x * t, p.y * t, t, p.frame), p.x, p.y, t);
+    }
+
+    // Static wall torches (torchlit floors). The server only places them on
+    // front-facing walls (floor directly to the south), so the sprite always mounts
+    // on a visible brick face and the pool spills down into the room. Each is an
+    // always-on warm light source (added in updateDarkness so it never moves); the
+    // sprites aren't tracked as darkCells, so they never dim. Rebuilt per floor.
+    this.clearTorches();
+    this.torchLights = [];
+    for (const tr of data.torches ?? []) {
+      const wx = tr.x * t + t / 2;
+      const wy = tr.y * t + t / 2;
+      const lx = wx; // pool centered below the torch (front wall faces south)
+      const ly = wy + t * 0.5;
+      this.torchLights.push({
+        x: lx,
+        y: ly,
+        inner: TORCH_LIGHT_INNER,
+        outer: TORCH_LIGHT_OUTER,
+        warm: true,
+      });
+      this.buildTorch(wx, wy);
     }
 
     // Descent beacon. buildMap re-runs on every floor (the server re-sends "map"
@@ -2034,20 +2082,77 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * How brightly a world point is lit this frame: 1 inside any hero's INNER radius,
-   * falling linearly to 0 at OUTER, 0 beyond every light. Lights pool — the value
-   * is the max over all sources — so teammates' bubbles add up (and a lone hero on
-   * a dark floor is a small island of sight).
+   * Build one wall torch: just the mounted sprite (on the front-facing wall tile)
+   * with a gentle alpha flicker. The light it casts is handled per-tile in
+   * updateDarkness (blocky, like the hero bubble) — no smooth glow overlay. Not
+   * tracked as a darkCell, so it stays lit. Registered for per-floor teardown.
    */
+  private buildTorch(wx: number, wy: number) {
+    const sprite = this.add.image(wx, wy, TILES_KEY, FRAME_TORCH).setDepth(TORCH_SPRITE_DEPTH);
+    const flicker = this.tweens.add({
+      targets: sprite,
+      alpha: 0.78,
+      duration: 620,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.inOut",
+    });
+    this.torchObjs.push(sprite);
+    this.torchTweens.push(flicker);
+  }
+
+  /** Tear down the previous floor's torch sprites + their flicker tweens. */
+  private clearTorches() {
+    for (const tw of this.torchTweens) tw.remove();
+    this.torchTweens = [];
+    for (const o of this.torchObjs) o.destroy();
+    this.torchObjs = [];
+  }
+
+  /**
+   * Sample the light at a world point this frame: `total` brightness (1 inside a
+   * source's INNER radius, fading to 0 at its OUTER, max-pooled over all sources so
+   * hero bubbles + torches add up) and `warm` — the torch share of that light (1 =
+   * pure torchlight, 0 = pure hero/neutral), which drives the per-tile amber tint.
+   */
+  private litSample(x: number, y: number): { total: number; warm: number } {
+    let hero = 0;
+    let torch = 0;
+    for (const s of this.lightSources) {
+      const dx = x - s.x;
+      const dy = y - s.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= s.outer * s.outer) continue;
+      const d = Math.sqrt(d2);
+      const a = d <= s.inner ? 1 : (s.outer - d) / (s.outer - s.inner);
+      if (s.warm) {
+        if (a > torch) torch = a;
+      } else if (a > hero) hero = a;
+    }
+    const total = Math.max(hero, torch);
+    const warm = total > 0 ? torch / (torch + hero) : 0;
+    return { total, warm };
+  }
+
+  /** Blend white → warm amber by torch share (0..1), capped so tiles stay readable. */
+  private warmTint(warm: number): number {
+    const s = Math.min(1, warm) * TORCH_TINT_MAX;
+    const r = Math.round(255 - (255 - TORCH_TINT_R) * s);
+    const g = Math.round(255 - (255 - TORCH_TINT_G) * s);
+    const b = Math.round(255 - (255 - TORCH_TINT_B) * s);
+    return (r << 16) | (g << 8) | b;
+  }
+
+  /** Total light at a point (visibility gating) — the brightness half of litSample. */
   private litAt(x: number, y: number): number {
     let best = 0;
     for (const s of this.lightSources) {
       const dx = x - s.x;
       const dy = y - s.y;
       const d2 = dx * dx + dy * dy;
-      if (d2 >= LIGHT_OUTER * LIGHT_OUTER) continue;
+      if (d2 >= s.outer * s.outer) continue;
       const d = Math.sqrt(d2);
-      const a = d <= LIGHT_INNER ? 1 : (LIGHT_OUTER - d) / (LIGHT_OUTER - LIGHT_INNER);
+      const a = d <= s.inner ? 1 : (s.outer - d) / (s.outer - s.inner);
       if (a > best) best = a;
       if (best >= 1) break;
     }
@@ -2078,13 +2183,35 @@ export class GameScene extends Phaser.Scene {
     // player who just went down isn't plunged into total black mid-respawn.
     const all = [...this.entities.values()];
     const lit = all.filter((e) => !e.downed);
-    this.lightSources = (lit.length ? lit : all).map((e) => ({ x: e.sprite.x, y: e.sprite.y }));
+    this.lightSources = (lit.length ? lit : all).map((e) => ({
+      x: e.sprite.x,
+      y: e.sprite.y,
+      inner: LIGHT_INNER,
+      outer: LIGHT_OUTER,
+      warm: false, // a hero's light is neutral; only torches tint warm
+    }));
+    // Static torch pools never move — append them so torchlit rooms stay lit even
+    // with no hero nearby (the dark gaps between are where secrets hide). Empty on
+    // a plain dark floor.
+    for (const t of this.torchLights) this.lightSources.push(t);
 
-    // Geometry: explored tiles stay >= EXPLORED_DIM; unexplored fade in with the light.
+    // Geometry: explored tiles stay >= EXPLORED_DIM; unexplored fade in with the
+    // light. On torchlit floors each tile also tints toward warm amber by its torch
+    // share (per-tile, so the warmth is as blocky as the brightness). Plain dark
+    // floors skip the warmth pass entirely (no torches → nothing to tint).
+    const hasTorches = this.torchLights.length > 0;
     for (const c of this.darkCells) {
-      const a = this.litAt(c.cx, c.cy);
-      if (a > LIGHT_VISIBLE_AT) this.explored.add(c.key);
-      c.obj.setAlpha(this.explored.has(c.key) ? Math.max(EXPLORED_DIM, a) : a);
+      if (hasTorches) {
+        const { total, warm } = this.litSample(c.cx, c.cy);
+        if (total > LIGHT_VISIBLE_AT) this.explored.add(c.key);
+        c.obj.setAlpha(this.explored.has(c.key) ? Math.max(EXPLORED_DIM, total) : total);
+        if (warm > 0.01) c.obj.setTint(this.warmTint(warm));
+        else c.obj.clearTint();
+      } else {
+        const a = this.litAt(c.cx, c.cy);
+        if (a > LIGHT_VISIBLE_AT) this.explored.add(c.key);
+        c.obj.setAlpha(this.explored.has(c.key) ? Math.max(EXPLORED_DIM, a) : a);
+      }
     }
 
     // Dynamic entities: hidden unless a light is on them.
