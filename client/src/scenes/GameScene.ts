@@ -89,13 +89,25 @@ const FRAME_TORCH = 125; // Tiny Dungeon item that reads as a torch on a front-f
 const TORCH_LIGHT_INNER = 1 * 16; // px fully lit at the flame
 const TORCH_LIGHT_OUTER = 4.5 * 16; // px the pool reaches (vs a hero's 6.5)
 const TORCH_SPRITE_DEPTH = 2; // the torch sits above the wall it's mounted on
-// Torchlit tiles tint toward this warm amber, blended per-tile (blocky, matching the
-// alpha steps — no smooth glow overlay). Strength scales with the torch's share of a
-// tile's light and caps at TORCH_TINT_MAX so geometry stays readable, just firelit.
-const TORCH_TINT_R = 0xff;
-const TORCH_TINT_G = 0xb0;
-const TORCH_TINT_B = 0x60;
+// Each light source tints the tiles it dominates toward its own color, blended
+// per-tile (blocky, matching the alpha steps — no smooth glow overlay), capped at a
+// per-source strength so geometry stays readable. Torches tint warm amber; heroes
+// tint subtly toward their player color (you read teammates by their glow); a downed
+// hero's distress beacon tints danger-red.
+const TORCH_TINT_COLOR = 0xffb060; // warm amber
 const TORCH_TINT_MAX = 0.55;
+// A hero's own light stays neutral (your view is true-color); teammates' light picks
+// up a *subtle* hint of their player color so you can tell whose bubble is whose.
+const HERO_LIGHT_TINT_MAX = 0.16;
+// Downed-teammate distress beacon: a small, faint pool of danger-red light at a
+// downed hero (vs their full light going out), so a pitch-black revive run reveals
+// the swarm on them — "spot the glow, fight to it." Smaller even than a torch.
+const DISTRESS_LIGHT_INNER = 0.5 * 16;
+const DISTRESS_LIGHT_OUTER = 2.6 * 16;
+const DISTRESS_TINT_COLOR = 0xff5a3c; // hot red-orange
+const DISTRESS_TINT_MAX = 0.5;
+const DISTRESS_GLOW_RADIUS = 13; // px; the pulsing ember drawn on the prone hero
+const DISTRESS_GLOW_DEPTH = 9; // under the hero (depth 10), like the buff aura
 // Two gravestone shapes for death markers — a rounded headstone (#64) and a
 // rectangular slab (#65). Picked deterministically per marker so every client
 // renders the same stone for a given fallen hero.
@@ -299,6 +311,7 @@ interface Entity {
   defBuff: number;
   color: number; // the hero's tint, restored when they're revived
   downed: boolean; // greyed/prone while awaiting respawn or revive
+  distress?: Phaser.GameObjects.Arc; // pulsing distress beacon while downed on a dark floor
 }
 
 interface MobEntity {
@@ -395,11 +408,12 @@ export class GameScene extends Phaser.Scene {
   private darkBackdrop?: Phaser.GameObjects.Rectangle;
   // Light origins for the current frame: hero positions (rebuilt each pass) plus the
   // floor's static torches. Each carries its own inner/outer radius (a torch pool is
-  // smaller than a hero's bubble) and a `warm` flag (torchlight tints tiles amber).
-  private lightSources: { x: number; y: number; inner: number; outer: number; warm: boolean }[] = [];
+  // smaller than a hero's bubble) and a tint+strength — the color the tiles it
+  // dominates blend toward (white/strength-0 = neutral).
+  private lightSources: { x: number; y: number; inner: number; outer: number; tint: number; strength: number }[] = [];
   // Torchlit floors: always-on torch light pools (world coords, offset into the room),
   // rebuilt per floor. Appended to lightSources every frame so the pools never move.
-  private torchLights: { x: number; y: number; inner: number; outer: number; warm: boolean }[] = [];
+  private torchLights: { x: number; y: number; inner: number; outer: number; tint: number; strength: number }[] = [];
   // Torch sprites and their flicker tweens, torn down per floor.
   private torchObjs: Phaser.GameObjects.GameObject[] = [];
   private torchTweens: Phaser.Tweens.Tween[] = [];
@@ -633,6 +647,8 @@ export class GameScene extends Phaser.Scene {
         e.label.destroy();
         e.hpBar.destroy();
         e.aura.destroy();
+        if (e.distress) this.tweens.killTweensOf(e.distress);
+        e.distress?.destroy();
         this.entities.delete(sessionId);
       }
     });
@@ -1494,6 +1510,36 @@ export class GameScene extends Phaser.Scene {
     } else {
       e.sprite.setTint(e.color).setAlpha(1).setAngle(0);
     }
+    this.syncDistressGlow(e);
+  }
+
+  /**
+   * Reconcile a downed teammate's distress beacon: a pulsing danger-red ember on the
+   * prone hero, present only while they're downed on a dark/torchlit floor. The faint
+   * light it casts (added in updateDarkness) is what reveals the swarm during a
+   * pitch-black revive run; this ember is the eye-catcher that draws you to them.
+   */
+  private syncDistressGlow(e: Entity) {
+    const want = e.downed && this.darkFloor;
+    if (want && !e.distress) {
+      e.distress = this.add
+        .circle(e.sprite.x, e.sprite.y, DISTRESS_GLOW_RADIUS, DISTRESS_TINT_COLOR, 0.5)
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setDepth(DISTRESS_GLOW_DEPTH);
+      this.tweens.add({
+        targets: e.distress,
+        scale: 1.7,
+        alpha: 0.12,
+        duration: 600,
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.inOut",
+      });
+    } else if (!want && e.distress) {
+      this.tweens.killTweensOf(e.distress);
+      e.distress.destroy();
+      e.distress = undefined;
+    }
   }
 
   /**
@@ -1823,10 +1869,15 @@ export class GameScene extends Phaser.Scene {
         y: ly,
         inner: TORCH_LIGHT_INNER,
         outer: TORCH_LIGHT_OUTER,
-        warm: true,
+        tint: TORCH_TINT_COLOR,
+        strength: TORCH_TINT_MAX,
       });
       this.buildTorch(wx, wy);
     }
+
+    // Floor changed (darkFloor may have flipped) — reconcile any downed hero's
+    // distress beacon: it only exists while downed on a dark/torchlit floor.
+    this.entities.forEach((e) => this.syncDistressGlow(e));
 
     // Descent beacon. buildMap re-runs on every floor (the server re-sends "map"
     // on descend), so rebuild the marker each time at the new exit.
@@ -2112,12 +2163,14 @@ export class GameScene extends Phaser.Scene {
   /**
    * Sample the light at a world point this frame: `total` brightness (1 inside a
    * source's INNER radius, fading to 0 at its OUTER, max-pooled over all sources so
-   * hero bubbles + torches add up) and `warm` — the torch share of that light (1 =
-   * pure torchlight, 0 = pure hero/neutral), which drives the per-tile amber tint.
+   * hero bubbles + torches add up) and `tint` — the color this tile blends toward,
+   * taken from whichever source lights it most (torch amber, a teammate's player
+   * color, a downed hero's distress red, or neutral white for your own light).
    */
-  private litSample(x: number, y: number): { total: number; warm: number } {
-    let hero = 0;
-    let torch = 0;
+  private litSample(x: number, y: number): { total: number; tint: number } {
+    let best = 0;
+    let bestTint = 0xffffff;
+    let bestStrength = 0;
     for (const s of this.lightSources) {
       const dx = x - s.x;
       const dy = y - s.y;
@@ -2125,21 +2178,24 @@ export class GameScene extends Phaser.Scene {
       if (d2 >= s.outer * s.outer) continue;
       const d = Math.sqrt(d2);
       const a = d <= s.inner ? 1 : (s.outer - d) / (s.outer - s.inner);
-      if (s.warm) {
-        if (a > torch) torch = a;
-      } else if (a > hero) hero = a;
+      if (a > best) {
+        best = a;
+        bestTint = s.tint;
+        bestStrength = s.strength;
+      }
     }
-    const total = Math.max(hero, torch);
-    const warm = total > 0 ? torch / (torch + hero) : 0;
-    return { total, warm };
+    return { total: best, tint: bestStrength > 0 ? this.blendTint(bestTint, bestStrength) : 0xffffff };
   }
 
-  /** Blend white → warm amber by torch share (0..1), capped so tiles stay readable. */
-  private warmTint(warm: number): number {
-    const s = Math.min(1, warm) * TORCH_TINT_MAX;
-    const r = Math.round(255 - (255 - TORCH_TINT_R) * s);
-    const g = Math.round(255 - (255 - TORCH_TINT_G) * s);
-    const b = Math.round(255 - (255 - TORCH_TINT_B) * s);
+  /** Blend white → `color` by `strength` (0..1) for a multiply-tint that warms/cools. */
+  private blendTint(color: number, strength: number): number {
+    const s = Math.min(1, Math.max(0, strength));
+    const cr = (color >> 16) & 0xff;
+    const cg = (color >> 8) & 0xff;
+    const cb = color & 0xff;
+    const r = Math.round(255 - (255 - cr) * s);
+    const g = Math.round(255 - (255 - cg) * s);
+    const b = Math.round(255 - (255 - cb) * s);
     return (r << 16) | (g << 8) | b;
   }
 
@@ -2178,40 +2234,51 @@ export class GameScene extends Phaser.Scene {
    * Heroes themselves are the light sources, so they're never gated.
    */
   private updateDarkness() {
-    // Living heroes are the lights. A downed hero's light goes out (raising the
-    // stakes of a wipe in the dark) but we keep at least one source so a solo
-    // player who just went down isn't plunged into total black mid-respawn.
-    const all = [...this.entities.values()];
-    const lit = all.filter((e) => !e.downed);
-    this.lightSources = (lit.length ? lit : all).map((e) => ({
-      x: e.sprite.x,
-      y: e.sprite.y,
-      inner: LIGHT_INNER,
-      outer: LIGHT_OUTER,
-      warm: false, // a hero's light is neutral; only torches tint warm
-    }));
+    // Build this frame's lights from the heroes. A living hero is a full bubble that
+    // tints its tiles toward their player color — except your OWN light, which stays
+    // neutral so your immediate view is true-color (you read *teammates* by their
+    // glow). A downed hero's full light goes out (raising the stakes of a wipe in the
+    // dark); instead they emit a small, faint danger-red distress beacon so a
+    // pitch-black revive run reveals the swarm on them. If EVERYONE is down (e.g. a
+    // solo player who just fell), we fall back to full neutral light so they aren't
+    // plunged into total black mid-respawn.
+    const entries = [...this.entities.entries()];
+    const anyLiving = entries.some(([, e]) => !e.downed);
+    this.lightSources = entries.map(([id, e]) => {
+      if (anyLiving && e.downed) {
+        return {
+          x: e.sprite.x,
+          y: e.sprite.y,
+          inner: DISTRESS_LIGHT_INNER,
+          outer: DISTRESS_LIGHT_OUTER,
+          tint: DISTRESS_TINT_COLOR,
+          strength: DISTRESS_TINT_MAX,
+        };
+      }
+      const isLocal = id === this.localId;
+      return {
+        x: e.sprite.x,
+        y: e.sprite.y,
+        inner: LIGHT_INNER,
+        outer: LIGHT_OUTER,
+        tint: e.color,
+        strength: isLocal ? 0 : HERO_LIGHT_TINT_MAX,
+      };
+    });
     // Static torch pools never move — append them so torchlit rooms stay lit even
     // with no hero nearby (the dark gaps between are where secrets hide). Empty on
     // a plain dark floor.
     for (const t of this.torchLights) this.lightSources.push(t);
 
     // Geometry: explored tiles stay >= EXPLORED_DIM; unexplored fade in with the
-    // light. On torchlit floors each tile also tints toward warm amber by its torch
-    // share (per-tile, so the warmth is as blocky as the brightness). Plain dark
-    // floors skip the warmth pass entirely (no torches → nothing to tint).
-    const hasTorches = this.torchLights.length > 0;
+    // light. Each tile also tints toward its dominant source's color (per-tile, so
+    // the tint is as blocky as the brightness) — neutral white where your own light
+    // wins, so it's a no-op cost on a plain solo dark floor.
     for (const c of this.darkCells) {
-      if (hasTorches) {
-        const { total, warm } = this.litSample(c.cx, c.cy);
-        if (total > LIGHT_VISIBLE_AT) this.explored.add(c.key);
-        c.obj.setAlpha(this.explored.has(c.key) ? Math.max(EXPLORED_DIM, total) : total);
-        if (warm > 0.01) c.obj.setTint(this.warmTint(warm));
-        else c.obj.clearTint();
-      } else {
-        const a = this.litAt(c.cx, c.cy);
-        if (a > LIGHT_VISIBLE_AT) this.explored.add(c.key);
-        c.obj.setAlpha(this.explored.has(c.key) ? Math.max(EXPLORED_DIM, a) : a);
-      }
+      const { total, tint } = this.litSample(c.cx, c.cy);
+      if (total > LIGHT_VISIBLE_AT) this.explored.add(c.key);
+      c.obj.setAlpha(this.explored.has(c.key) ? Math.max(EXPLORED_DIM, total) : total);
+      c.obj.setTint(tint);
     }
 
     // Dynamic entities: hidden unless a light is on them.
@@ -2248,6 +2315,7 @@ export class GameScene extends Phaser.Scene {
       e.sprite.y = Phaser.Math.Linear(e.sprite.y, e.target.y, k);
       e.label.x = e.sprite.x;
       e.label.y = e.sprite.y - LABEL_OFFSET;
+      if (e.distress) e.distress.setPosition(e.sprite.x, e.sprite.y);
       this.drawHpBar(e.hpBar, e.sprite.x, e.sprite.y, e.hp, e.maxHp);
       this.updateAura(e, time);
     });
