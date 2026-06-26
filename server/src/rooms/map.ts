@@ -30,16 +30,22 @@ interface FloorPreset {
 /**
  * Per-floor lighting modifier — a GAMEPLAY axis, not cosmetics. "bright" is the
  * normal fully-lit floor; "dark" floors render only what a hero's light reaches,
- * so mobs/loot/crates/the ladder stay hidden until approached (the client owns
- * the actual vision rendering; the server just rolls + announces the mode). Rolled
- * per floor and sent in the "map" message. Torchlit (static light sources) is a
- * planned third mode.
+ * so mobs/loot/crates/the ladder stay hidden until approached. "torchlit" floors
+ * are dark too, but static wall torches throw permanent pools of light — and
+ * secrets (bonus crates + a loose loot drop) hide in the deliberate gaps between
+ * them, revealed only when a hero's light reaches the shadow. The client owns the
+ * actual vision rendering; the server rolls the mode + owns torch/secret POSITIONS
+ * (the light those torches cast is a client render concern). Sent in the "map"
+ * message.
  */
-export const LIGHTING = ["bright", "dark"] as const;
+export const LIGHTING = ["bright", "dark", "torchlit"] as const;
 export type Lighting = (typeof LIGHTING)[number];
 // Roughly one floor in three is dark — frequent enough to matter, rare enough to
 // stay a "change of pace." Tunable; a dev override lives in DungeonRoom.
 const DARK_CHANCE = 0.34;
+// ...and a bit over one in five is torchlit (rolled from the same draw, after the
+// dark slice). So past floor 1: ~34% dark, ~22% torchlit, the rest bright.
+const TORCHLIT_CHANCE = 0.22;
 
 const PRESETS: readonly FloorPreset[] = [
   // Many small rooms connected by a tangle of corridors. Cramped fights,
@@ -164,6 +170,14 @@ export interface LoadedMap {
   preset: string;
   /** lighting mode for this floor; sent to clients so they render the vision bubble */
   lighting: Lighting;
+  /** torchlit floors only: wall tiles (TILE coords) carrying a static torch. The
+   *  client renders the sconce + a warm glow and adds each as an always-on light
+   *  source. Empty on bright/dark floors. */
+  torches: { x: number; y: number }[];
+  /** torchlit floors only: floor tiles (TILE coords) seeding a loose bonus loot
+   *  drop in the unlit gaps between torches — the server spawns a drop on each at
+   *  floor-enter. Empty on bright/dark floors. */
+  secretLoot: { x: number; y: number }[];
 }
 
 // Prop placement. Props go only on room-edge tiles (exactly one orthogonal wall
@@ -251,6 +265,133 @@ function placeProps(
   }
   return props;
 }
+
+// Torch placement (torchlit floors). Torches mount only on FRONT-FACING walls — a
+// wall tile with floor directly to the SOUTH (the visible brick face) and rock on
+// the other three sides. That's the one wall orientation a flat torch sprite reads
+// correctly on; side/back walls have no face to hang it on. Sparse on purpose: a
+// low per-candidate probability leaves whole stretches unlit, and those gaps are
+// where secrets hide. Deterministic for a grid (coordHash, no RNG draw).
+const TORCH_CHANCE = 0.14; // per front-facing wall tile (a smaller pool than all walls)
+
+function placeTorches(grid: number[][]): { x: number; y: number }[] {
+  const isFloor = (x: number, y: number) =>
+    x >= 0 && y >= 0 && x < MAP_W && y < MAP_H && grid[y][x] === 0;
+  const torches: { x: number; y: number }[] = [];
+  for (let y = 1; y < MAP_H - 1; y++) {
+    for (let x = 1; x < MAP_W - 1; x++) {
+      if (grid[y][x] !== 1) continue; // torches go on walls
+      // Floor to the south, rock on the other three sides → a clean front face.
+      if (!isFloor(x, y + 1)) continue;
+      if (isFloor(x, y - 1) || isFloor(x + 1, y) || isFloor(x - 1, y)) continue;
+      if (coordHash(x, y, 3) >= TORCH_CHANCE) continue;
+      torches.push({ x, y });
+    }
+  }
+  return torches;
+}
+
+// How far (in tiles) a floor tile must sit from EVERY torch to count as a
+// deliberate shadow pocket where secrets hide. Must exceed the client torch
+// light radius (≈ LIGHT_OUTER / TILE ≈ 4.5 tiles in GameScene) so a cache truly
+// stays dark until a hero — not a torch — lights it.
+const SECRET_DARK_THRESHOLD = 5;
+const CACHE_CHANCE = 0.22; // per eligible dark room-edge tile → a small crate cluster
+
+/**
+ * Seed this torchlit floor's secrets in the unlit gaps between torches:
+ *  - extra BREAKABLE crates (returned as props; the room turns them into synced
+ *    crates exactly like furniture, so they render hidden-until-lit and drop loot
+ *    on smash for free), and
+ *  - one loose bonus-loot tile (the single darkest reachable floor tile), which
+ *    the room spawns a drop on at floor-enter.
+ * Crates are added one at a time with the same connectivity guard as placeProps,
+ * so a cache can never wall off the dungeon. Deterministic for a grid + torches.
+ */
+function placeSecrets(
+  grid: number[][],
+  start: { x: number; y: number },
+  torches: { x: number; y: number }[],
+  existing: Prop[],
+  exclude: Set<string>
+): { crates: Prop[]; loot: { x: number; y: number }[] } {
+  if (torches.length === 0) return { crates: [], loot: [] };
+
+  const isWall = (x: number, y: number) =>
+    x < 0 || y < 0 || x >= MAP_W || y >= MAP_H || grid[y][x] === 1;
+  // Squared distance to the nearest torch (tile space) — cheap, no sqrt.
+  const farFromTorches = (x: number, y: number): boolean => {
+    let best = Infinity;
+    for (const t of torches) {
+      const d2 = (t.x - x) ** 2 + (t.y - y) ** 2;
+      if (d2 < best) best = d2;
+    }
+    return best >= SECRET_DARK_THRESHOLD * SECRET_DARK_THRESHOLD;
+  };
+  const nearestTorchD2 = (x: number, y: number): number => {
+    let best = Infinity;
+    for (const t of torches) {
+      const d2 = (t.x - x) ** 2 + (t.y - y) ** 2;
+      if (d2 < best) best = d2;
+    }
+    return best;
+  };
+
+  let totalFloor = 0;
+  for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) if (grid[y][x] === 0) totalFloor++;
+
+  // Seed the connectivity guard with every already-solid prop tile, so adding a
+  // cache crate is checked against the real walkable space.
+  const blocked = new Set<string>(existing.map((p) => `${p.x},${p.y}`));
+
+  const crates: Prop[] = [];
+  let bonus: { x: number; y: number } | null = null;
+  let bonusD2 = SECRET_DARK_THRESHOLD * SECRET_DARK_THRESHOLD; // loot must also be in shadow
+
+  for (let y = 0; y < MAP_H; y++) {
+    for (let x = 0; x < MAP_W; x++) {
+      if (grid[y][x] !== 0) continue;
+      const key = `${x},${y}`;
+      if (exclude.has(key) || blocked.has(key)) continue;
+      if (!farFromTorches(x, y)) continue;
+
+      // The loose bonus drop: the darkest reachable tile, lying in open floor.
+      const d2 = nearestTorchD2(x, y);
+      if (d2 > bonusD2) {
+        bonusD2 = d2;
+        bonus = { x, y };
+      }
+
+      // Cache crates: room-edge tiles only (one wall neighbor) so they sit against
+      // a wall like furniture, sparse via coordHash, and never disconnecting.
+      const wallNeighbors =
+        (isWall(x, y - 1) ? 1 : 0) +
+        (isWall(x + 1, y) ? 1 : 0) +
+        (isWall(x, y + 1) ? 1 : 0) +
+        (isWall(x - 1, y) ? 1 : 0);
+      if (wallNeighbors !== 1) continue;
+      if (coordHash(x, y, 4) >= CACHE_CHANCE) continue;
+
+      blocked.add(key);
+      if (reachableCount(grid, start, blocked) !== totalFloor - blocked.size) {
+        blocked.delete(key);
+        continue;
+      }
+      const frame = SECRET_CRATE_FRAMES[Math.floor(coordHash(x, y, 5) * SECRET_CRATE_FRAMES.length)];
+      crates.push({ x, y, frame, breakable: true });
+    }
+  }
+
+  // Don't let the bonus drop land on a cache crate tile (it would be hidden inside
+  // a smashable). Fall back to no loose drop in the (rare) clash.
+  if (bonus && crates.some((c) => c.x === bonus!.x && c.y === bonus!.y)) bonus = null;
+
+  return { crates, loot: bonus ? [bonus] : [] };
+}
+
+// Cache crates draw only from breakable container frames (a subset of PROP_FRAMES
+// minus the immovable anvil) so every cache crate can actually be smashed for loot.
+const SECRET_CRATE_FRAMES = [82, 63, 73, 75]; // keg, crate stack, barrel, crates
 
 /**
  * Carve a sealed vault chamber off the dungeon: a small SxS room reachable only
@@ -377,7 +518,7 @@ function carveVault(
  * `depth` only gates the lighting roll (floor 1 is never dark — see below); it
  * does not affect geometry, so the same seed yields the same layout at any depth.
  */
-export function loadMap(seed: number, depth = 1): LoadedMap {
+export function loadMap(seed: number, depth = 1, forced?: Lighting): LoadedMap {
   const rand = mulberry32(seed);
   const randInt = (min: number, max: number) =>
     min + Math.floor(rand() * (max - min + 1));
@@ -479,8 +620,36 @@ export function loadMap(seed: number, depth = 1): LoadedMap {
   // Lighting mode — rolled last so it never perturbs the geometry RNG above (a
   // given seed keeps its exact layout). Independent of the preset. Floor 1 is
   // always bright: the game should be playable on sight, and opening on a dark
-  // floor (with no tutorial) would read as a turn-off rather than a twist.
-  const lighting: Lighting = depth > 1 && rand() < DARK_CHANCE ? "dark" : "bright";
+  // floor (with no tutorial) would read as a turn-off rather than a twist. One
+  // RNG draw splits past-floor-1 floors into dark / torchlit / bright slices. A
+  // `forced` mode (dev override) wins outright and still consumes the draw, so
+  // forcing one floor doesn't shift the layouts of other floors in a run.
+  let lighting: Lighting = "bright";
+  const lightingRoll = rand();
+  if (forced) {
+    lighting = forced;
+  } else if (depth > 1) {
+    if (lightingRoll < DARK_CHANCE) lighting = "dark";
+    else if (lightingRoll < DARK_CHANCE + TORCHLIT_CHANCE) lighting = "torchlit";
+  }
 
-  return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props, exit, vault, preset: preset.name, lighting };
+  // Torchlit floors get static wall torches plus secrets (extra crates + a loose
+  // bonus drop) seeded in the shadows between them. Both are pure functions of the
+  // grid (coordHash, no RNG draw), so they never perturb the geometry above — a
+  // given seed keeps its exact layout no matter which mode it rolls.
+  let torches: { x: number; y: number }[] = [];
+  let secretLoot: { x: number; y: number }[] = [];
+  if (lighting === "torchlit") {
+    torches = placeTorches(grid);
+    const exclude = new Set<string>([
+      ...(vaultCarve?.cells ?? []),
+      `${exit.x},${exit.y}`,
+      ...spawns.map((s) => `${Math.floor(s.x / TILE)},${Math.floor(s.y / TILE)}`),
+    ]);
+    const secrets = placeSecrets(grid, start, torches, props, exclude);
+    props.push(...secrets.crates);
+    secretLoot = secrets.loot;
+  }
+
+  return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props, exit, vault, preset: preset.name, lighting, torches, secretLoot };
 }
