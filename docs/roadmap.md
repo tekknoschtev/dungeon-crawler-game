@@ -20,7 +20,12 @@ Mobile-first, drop-in **co-op dive**. The loop:
 
 ## Locked design decisions
 
-- **Arcade** — no logins, no persistence. A run *is* the session; restart = fresh floor 1.
+- **Arcade** — no login wall, no accounts, no PII, no auth to manage. A run *is*
+  the session; restart = fresh floor 1. *Refined 2026-07-17:* this guards
+  drop-in friction and ops burden, not memory itself — persistence up to
+  **local browser storage** (bests/codex) and **anonymous claimed-nickname
+  scores** (a daily-seed leaderboard DB with nothing sensitive in it) is in
+  bounds. Cross-device profiles / logins / meta-progression stay out.
 - **Mobile-first** — the HUD stays minimal. No inventory, no loadout screens, no new buttons (protect the uncluttered HUD).
 - **No "clear the floor."** Pressure ramps with time-on-floor and resets on descend; you choose when to leave.
 - **Loot stays immediate-use**, with a score tally layered on top. The "collect / stash / deploy weapons" inventory idea was dropped (clashes with mobile minimalism).
@@ -43,6 +48,8 @@ Mobile-first, drop-in **co-op dive**. The loop:
 | **M8** | Quick Play matchmaking — public room pool + share links; lobby shows Quick Play / New Private Room / Join by Code | [#23](https://github.com/tekknoschtev/dungeon-crawler-game/pull/23) |
 | **M9** | Spawn lull — a kill holds off the pressure refill (stacking, capped), so routing a cluster quiets the floor; killing *en masse* becomes a relief tactic | [#26](https://github.com/tekknoschtev/dungeon-crawler-game/pull/26) |
 | **M10** | Collectible bomb — crate-dropped (rubber-banded deeper); place with E / contextual mobile button → local blast (hurts the placer) + map-wide stun | [#27](https://github.com/tekknoschtev/dungeon-crawler-game/pull/27) |
+| **M11** | Exit pulse — channeling the descent wards the ladder (knockback + stagger pulses), so racing to the stairs works *under fire* | [#29](https://github.com/tekknoschtev/dungeon-crawler-game/pull/29) |
+| — | Floor-lighting arc — dark floors (hero-light vision bubble), torchlit floors + secrets in the shadows, co-op vision (per-hero tint + downed distress beacon) | [#31](https://github.com/tekknoschtev/dungeon-crawler-game/pull/31), [#32](https://github.com/tekknoschtev/dungeon-crawler-game/pull/32), [#33](https://github.com/tekknoschtev/dungeon-crawler-game/pull/33) |
 | — | Mobile HUD placement fix (stat HUD off the touch controls) | [#14](https://github.com/tekknoschtev/dungeon-crawler-game/pull/14) |
 
 Earlier systems already in place (not re-listed as backlog): CC0 art pass
@@ -62,6 +69,49 @@ each lives.
   emit it on server start + as a client-visible value so it's easy to confirm the
   latest build is actually running in prod.
 
+### Engagement arc (M13–M15) — planned 2026-07-17
+
+The theme: depth is currently only a number — nothing marks the journey. These
+make descending feel like going *somewhere* and give runs a memory. Build order
+M13 → M14 (M14's "NEW" badges hang off M13's panel); M15 is independent.
+
+- **M13 — Run-end discoveries panel.** The score screen becomes the run's
+  museum: the relics claimed (they're procedurally-named trophies and nothing
+  displays them prominently today), weapons wielded, a bestiary tally of kinds
+  slain, floors survived, crates smashed. Server side: accumulate per-player run
+  tallies in the existing non-synced `Combat` record (kills by kind, weapons
+  held, loot by rarity, chests opened) and ship them **once in the `"gameover"`
+  message payload** — no new `@type` state, zero per-tick cost (relics are
+  already synced). Client side: score-screen layout work, mobile-first. This
+  absorbs the long-deferred **score-screen polish** owner ask.
+
+- **M14 — Local codex + personal bests (client-only).** `localStorage`
+  (versioned key, per-browser by design — in bounds per the refined arcade
+  rule). Two layers: **bests** (high score, deepest floor, runs played) and a
+  **lifetime codex** (weapons ever held, mob kinds ever slain, best relic
+  rarity + named-relic collection). Surfaces: a "Best: … · Deepest: floor …"
+  line in the lobby, "NEW BEST" flashes on the score screen, and **NEW** badges
+  in M13's panel when a run logs a first-ever discovery ("you've never held a
+  warhammer" is a descend motivator). No server changes; the minimal in-run HUD
+  is untouched — lobby and score screen only.
+
+- **M15 — Depth biomes.** Every ~4–5 floors the dungeon *becomes a different
+  place*: new floor/wall/prop art per depth band, layered on the existing
+  archetype × lighting axes. **Real alternate tilesets, not tints of the
+  current art** (owner call, 2026-07-17). Sourcing direction: Kenney's other
+  "Tiny" packs — same 16×16 / 12-column packed-sheet format and flat style as
+  Tiny Dungeon; Tiny Town is already shipped (vault key) and has
+  grass/dirt/brick terrain, Tiny Battle / Tiny Ski cover sand and snow/ice.
+  **Verify before committing to a band list**: the pseudo-2.5D wall autotiler
+  needs face/side/shadow roles per biome, and the non-dungeon packs' wall tiles
+  may need adaptation — inspect the actual sheets (raw packs live under the
+  gitignored `assets-src/`) and pick bands from what the art supports. Server:
+  derive biome from depth band in `map.ts`, send it in the `"map"` message
+  (exactly like `lighting`); biome may also pick the prop/crate frame set.
+  Client: a per-biome frame-map table (role → sheet + frame) feeding the
+  existing autotiler. Log every new pack in `ATTRIBUTION.md`. Follow-ons
+  (unscheduled): biome-flavored mob-mix nudges, descend flavor text.
+
 ## Comeback toolkit — deep-floor relief valves
 
 Playtesting surfaced a death spiral on deep floors (~F10+): mob damage scales
@@ -76,25 +126,18 @@ Build **one at a time**, re-playtesting L12 between each. Tune timid — four re
 valves at full strength could make deep floors go soft. Possible future: gate each
 behind a server toggle so they can be A/B'd / mixed-and-matched.
 
-**Shipped:** **M9 — Spawn lull** ([#26](https://github.com/tekknoschtev/dungeon-crawler-game/pull/26))
-and **M10 — Collectible bomb** ([#27](https://github.com/tekknoschtev/dungeon-crawler-game/pull/27));
+**Shipped:** **M9 — Spawn lull** ([#26](https://github.com/tekknoschtev/dungeon-crawler-game/pull/26)),
+**M10 — Collectible bomb** ([#27](https://github.com/tekknoschtev/dungeon-crawler-game/pull/27)),
+and **M11 — Exit pulse** ([#29](https://github.com/tekknoschtev/dungeon-crawler-game/pull/29));
 see the [Shipped](#shipped) table. Bomb kills route through `killMob`, so they
 feed the spawn lull for free — a cluster detonation quiets the floor afterward.
-Remaining (a co-op polish pass, shippable together):
-
-- **M11 — Exit pulse.** Starting the descent channel (`DESCEND_CHANNEL_TIME`)
-  makes the ladder emit a knockback/stagger pulse that shoves nearby mobs back, so
-  racing to the stairs is a viable escape *under fire* — not something you can only
-  do once a room is already clear. The reliable escape the rare bomb can't
-  guarantee; descent is already the intended pressure reset (`enterFloor`), this
-  makes it reachable.
+Remaining:
 
 - **M12 — Co-revive reprieve.** A revive grants a brief shared invuln (~1.5s) to
   reviver *and* revived, plus a small knockback pulse to clear the immediate space.
   Stops the "revived straight back into the swarm" instant re-down and rewards the
   healer's risk — the clearest mechanical incentive to play grouped. Builds on the
-  existing revive (`REVIVE_RANGE`, `REVIVE_HP_PCT`). Ship alongside M11 as a co-op
-  polish pass.
+  existing revive (`REVIVE_RANGE`, `REVIVE_HP_PCT`).
 
 ## Backlog (unscheduled)
 
@@ -102,11 +145,19 @@ Grouped by where the work mostly lives. Tuning lives in
 `server/src/rooms/tuning.ts`; client-only items are pure render/UX and need no
 new synced state.
 
+**Level Design**
+- **Massive levels** - Levels that feel so punishingly large that it's a challenge to get to the exit before the heat is full.  Maybe lots of corridors.  This probably will need some dials to make it fun and not just tedious.
+
 **Gameplay / loot**
 - **Permanent weapon changes** — a way to make an equipped weapon stick rather
   than lapse with the timed buff.
 - **Closeable doors** — doors a player can shut to make a safe recover/pause
   space (server-authoritative map/door state).
+- **Descent to same location** — when descending, all players start in the same
+  location.
+- **Bomb mechanics** — difficult to escape the bomb blast radius before it pops:
+  increase fuse time, and increase stun time. Current mechanics don't provide
+  the pressure relief that a bomb might imply.
 
 **Mobs**
 - **More behaviors** — ranged / wall-phasing kinds (M5 shipped stat-only variety).
@@ -122,6 +173,15 @@ new synced state.
 - **Prevent held-attack auto-fire** — stop holding the attack/space key from
   continuously swinging.
 
+**Meta / retention** *(secondary to M13/M14 — build after the local layer lands)*
+- **Daily seed + anonymous leaderboard** — the generator is already fully
+  seeded, so "today's dungeon" is just seed = date hash surfaced as a lobby
+  option. Leaderboard = arcade-cabinet identity: a **claimed nickname** (no
+  auth, no email, no PII — impersonation is exactly as serious as it was on a
+  Galaga machine) posted with score/depth/date to a small server-side DB.
+  Within the refined arcade rule (see locked decisions); pairs with the
+  owner-telemetry item below, since the run-end summary is the score row.
+
 **Ops / telemetry**
 - **Owner telemetry** — log the run-end `"gameover"` summary server-side (no PII)
   for owner metrics; the score-screen payload *is* the analytics object.
@@ -130,8 +190,8 @@ new synced state.
 
 ## Deferred
 
-- **Score-screen polish** — the standing owner ask; revisit after the milestones
-  above.
+- **Score-screen polish** — the standing owner ask; **absorbed into M13** (the
+  discoveries panel is the polish pass).
 - **Key-carrying to door** — M6 uses instant unlock on pickup; eventually the
   player who picks up the key should carry it to the vault door to open it,
   creating a co-op escort moment. Deferred until M8 matchmaking is in so there
