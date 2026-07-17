@@ -467,6 +467,19 @@
         font-variant-numeric: tabular-nums;
         font-weight: 600;
       }
+      /* Run discoveries under a player's score row (M13) — Wielded/Slain/Hauled. */
+      .score-discoveries {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        margin: -1px 0 4px;
+        padding: 0 8px 0 14px;
+      }
+      .disc-line {
+        font-size: 11px;
+        color: var(--muted);
+        overflow-wrap: anywhere; /* long kill lists wrap instead of overflowing (mobile) */
+      }
       /* Vault relics listed under a player's score row — small, dimmed, wrapped. */
       .score-relics {
         display: flex;

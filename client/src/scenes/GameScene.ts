@@ -287,6 +287,16 @@ interface BombView {
   fuse: number; // seconds left until detonation (drives the warning flash)
 }
 
+/** A hero's run discoveries (M13), shipped once in the "gameover" payload —
+ *  mirrors the server's RunTally (DungeonRoom.ts). */
+interface RunTally {
+  kills: Record<string, number>; // mob kind → kills this run
+  weapons: string[]; // distinct weapons wielded, in first-held order
+  loot: Record<string, number>; // scored pickups by rarity (bombs excluded)
+  crates: number; // crates smashed
+  chests: number; // vault chests cracked open
+}
+
 interface MapMessage {
   tile: number;
   width: number;
@@ -391,6 +401,9 @@ export class GameScene extends Phaser.Scene {
   // True between the server's "descend" signal and the next floor's map arriving,
   // so buildMap knows to fade back in (the descent swaps floors under black).
   private descending = false;
+  // Per-player run discoveries from the last "gameover" message (M13), keyed by
+  // sessionId; null outside the wipe score screen (a voluntary exit has none).
+  private runTallies: Record<string, RunTally> | null = null;
 
   // --- Dark-floor vision (server-rolled "dark" lighting) ------------------
   // When true, the floor renders only what a hero's light reaches: geometry you've
@@ -565,11 +578,15 @@ export class GameScene extends Phaser.Scene {
       this.cameras.main.fadeOut(250, 0, 0, 0);
     });
 
-    // The party wiped — show the (placeholder) game-over screen with the floor
-    // reached. The Restart button (wired in create) sends "restart".
-    this.room.onMessage<{ floor: number }>("gameover", ({ floor }) => {
-      this.setGameOverOverlay(true, floor);
-    });
+    // The party wiped — show the game-over score screen with the floor reached
+    // and each hero's run discoveries (M13). Restart (wired in create) sends "restart".
+    this.room.onMessage<{ floor: number; tallies?: Record<string, RunTally> }>(
+      "gameover",
+      ({ floor, tallies }) => {
+        this.runTallies = tallies ?? null;
+        this.setGameOverOverlay(true, floor);
+      }
+    );
 
     // A teammate (or you) cracked the vault — gold toast naming the relic.
     this.room.onMessage<{ name: string; who: string }>("relic", ({ name, who }) => {
@@ -1582,6 +1599,7 @@ export class GameScene extends Phaser.Scene {
     if (!show) {
       // Restart returned us to play — drop the overlay, offer the exit again.
       el.hidden = true;
+      this.runTallies = null; // fresh run, fresh discoveries
       this.setExitButtonVisible(true);
       return;
     }
@@ -1715,8 +1733,58 @@ export class GameScene extends Phaser.Scene {
         }
         list.appendChild(relics);
       }
+
+      // The hero's run discoveries (M13) — only present after a wipe (the server
+      // ships tallies with "gameover"); a voluntary exit shows the plain board.
+      const tally = this.runTallies?.[r.id];
+      if (tally) {
+        const disc = this.buildDiscoveryLines(tally);
+        if (disc) list.appendChild(disc);
+      }
     }
     if (totalEl) totalEl.textContent = total.toLocaleString();
+  }
+
+  /**
+   * The run's museum for one hero (M13): compact "Wielded / Slain / Hauled" lines
+   * under their score row. Everything is server-built strings and counts —
+   * rendered via textContent only. Returns null when the run logged nothing.
+   */
+  private buildDiscoveryLines(tally: RunTally): HTMLElement | null {
+    const lines: string[] = [];
+
+    if (tally.weapons.length > 0) {
+      lines.push(`Wielded: ${tally.weapons.join(" · ")}`);
+    }
+
+    const kills = Object.entries(tally.kills).sort((a, b) => b[1] - a[1]);
+    if (kills.length > 0) {
+      lines.push(`Slain: ${kills.map(([kind, n]) => `${kind} ×${n}`).join(" · ")}`);
+    }
+
+    // Haul: total drops grabbed, calling out the rare+ finds; plus crates/vaults.
+    const lootTotal = Object.values(tally.loot).reduce((sum, n) => sum + n, 0);
+    const notable = ["legendary", "epic", "rare"]
+      .filter((rar) => (tally.loot[rar] ?? 0) > 0)
+      .map((rar) => `${tally.loot[rar]} ${rar}`);
+    const haul: string[] = [];
+    if (lootTotal > 0) {
+      haul.push(`${lootTotal} loot${notable.length > 0 ? ` (${notable.join(", ")})` : ""}`);
+    }
+    if (tally.crates > 0) haul.push(`${tally.crates} ${tally.crates === 1 ? "crate" : "crates"}`);
+    if (tally.chests > 0) haul.push(`${tally.chests} ${tally.chests === 1 ? "vault" : "vaults"}`);
+    if (haul.length > 0) lines.push(`Hauled: ${haul.join(" · ")}`);
+
+    if (lines.length === 0) return null;
+    const el = document.createElement("div");
+    el.className = "score-discoveries";
+    for (const text of lines) {
+      const line = document.createElement("div");
+      line.className = "disc-line";
+      line.textContent = text;
+      el.appendChild(line);
+    }
+    return el;
   }
 
   /**

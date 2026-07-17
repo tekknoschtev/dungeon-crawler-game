@@ -120,6 +120,26 @@ interface InputState {
   right: boolean;
 }
 
+/**
+ * Per-player run discoveries (M13, server-only). Accumulated all run and shipped
+ * ONCE in the "gameover" payload — never synced per-tick, so it costs nothing on
+ * the wire while playing. Reset with the rest of the run state on restart.
+ */
+interface RunTally {
+  kills: Record<string, number>; // mob kind → kills this run
+  weapons: string[]; // distinct weapons wielded, in first-held order
+  loot: Record<string, number>; // scored pickups by rarity (bombs excluded)
+  crates: number; // crates smashed
+  chests: number; // vault chests cracked open
+}
+
+const freshTally = (): RunTally => ({ kills: {}, weapons: [], loot: {}, crates: 0, chests: 0 });
+
+/** Record a weapon as wielded (distinct, ordered by first pickup). */
+const tallyWeapon = (tally: RunTally, name: string) => {
+  if (name && !tally.weapons.includes(name)) tally.weapons.push(name);
+};
+
 /** Per-player combat state (server-only; not synced). */
 interface Combat {
   attackReadyAt: number;
@@ -136,6 +156,7 @@ interface Combat {
   attackMult: number; // active attack-buff damage multiplier (1 = none)
   defenseReduce: number; // active defense-buff damage reduction 0..1 (0 = none)
   knockback: number; // px a hit mob is shoved by the equipped weapon (0 = none)
+  tally: RunTally; // run discoveries (M13) — see the interface above
 }
 
 /** Per-mob AI state (server-only; not synced). */
@@ -277,7 +298,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
 
     this.state.players.set(client.sessionId, player);
     this.inputs.set(client.sessionId, { up: false, down: false, left: false, right: false });
-    this.combat.set(client.sessionId, { attackReadyAt: 0, respawnReadyAt: 0, respawnsUsed: 0, bankedScore: 0, attackMult: 1, defenseReduce: 0, knockback: 0 });
+    this.combat.set(client.sessionId, { attackReadyAt: 0, respawnReadyAt: 0, respawnsUsed: 0, bankedScore: 0, attackMult: 1, defenseReduce: 0, knockback: 0, tally: freshTally() });
 
     // The map is sent when the client signals "ready" (see onCreate), not here.
     console.log(`${player.name} joined (${client.sessionId}). Players: ${this.clients.length}`);
@@ -554,6 +575,9 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       const name = rollRelic(Math.random, this.state.depth);
       opener.relics.push(name);
       this.broadcast("relic", { name, who: opener.name });
+
+      oc.tally.chests++;
+      tallyWeapon(oc.tally, "warhammer"); // the synthetic grant above — they wielded it
     }
 
     this.state.chests.delete(VAULT_ID); // client onRemove plays the burst
@@ -576,6 +600,8 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     // Score bonus to the breaker.
     const breaker = this.state.players.get(breakerId);
     if (breaker) breaker.score += Math.round(CRATE_SCORE_BONUS * this.floorScoreMult());
+    const bc = this.combat.get(breakerId);
+    if (bc) bc.tally.crates++;
 
     // Possible potion drop at the crate's position.
     if (Math.random() < CRATE_POTION_CHANCE) {
@@ -920,6 +946,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
         c.attackMult = 1;
         c.defenseReduce = 0;
         c.knockback = 0;
+        c.tally = freshTally();
       }
     });
     this.state.phase = "playing";
@@ -936,6 +963,8 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       // depth + heat-multiplier scoring (see MOBS / killScore).
       const base = mobByName(mob.kind).score;
       killer.score += Math.round(killScore(this.state.depth, base) * scoreMultiplier(this.state.heat) * this.floorScoreMult());
+      const kc = this.combat.get(killerId);
+      if (kc) kc.tally.kills[mob.kind] = (kc.tally.kills[mob.kind] ?? 0) + 1;
     }
     this.dropLoot(mob.x, mob.y);
     this.state.mobs.delete(id);
@@ -1131,6 +1160,8 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
           // except a bomb, which is a carried tool, not a haul (no points).
           if (loot.category !== "bomb") {
             player.score += Math.round(lootScore(loot.rarity) * scoreMultiplier(this.state.heat) * this.floorScoreMult());
+            c.tally.loot[loot.rarity] = (c.tally.loot[loot.rarity] ?? 0) + 1;
+            if (loot.category === "attack") tallyWeapon(c.tally, loot.variant);
           }
           this.state.loot.delete(lid);
         }
@@ -1193,7 +1224,15 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
         if (c) p.score = c.bankedScore;
       });
       this.state.phase = "gameover";
-      this.broadcast("gameover", { floor: this.state.depth });
+      // Ship each hero's run discoveries with the wipe (M13) — the score screen
+      // joins them to the synced players by sessionId. One message, so the tallies
+      // never cost per-tick bandwidth.
+      const tallies: Record<string, RunTally> = {};
+      this.state.players.forEach((_p, sid) => {
+        const c = this.combat.get(sid);
+        if (c) tallies[sid] = c.tally;
+      });
+      this.broadcast("gameover", { floor: this.state.depth, tallies });
     }
   }
 
