@@ -1,6 +1,6 @@
 import { Room, Client, matchMaker } from "colyseus";
 import { DungeonState, Player, Mob, Loot, DeathMarker, Chest, Crate, Bomb } from "./schema/DungeonState";
-import { loadMap, LoadedMap, TILE } from "./map";
+import { loadMap, LoadedMap, TILE, BIOMES, Biome } from "./map";
 import {
   PLAYER_SPEED,
   PLAYER_RADIUS,
@@ -342,8 +342,13 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     const forced = process.env.DUNGEON_LIGHTING;
     const forcedLighting =
       forced === "dark" || forced === "bright" || forced === "torchlit" ? forced : undefined;
-    this.map = loadMap(seed, depth, forcedLighting);
-    console.log(`Floor ${depth} — preset: ${this.map.preset}, lighting: ${this.map.lighting} (seed ${seed})`);
+    // Same dev-override pattern for the depth biome (M15): DUNGEON_BIOME=
+    // stone|overgrown|crypt|ember forces every floor's kit so a biome can be
+    // eyeballed on floor 1 without descending to its band. Unset in prod.
+    const fb = process.env.DUNGEON_BIOME;
+    const forcedBiome = (BIOMES as readonly string[]).includes(fb ?? "") ? (fb as Biome) : undefined;
+    this.map = loadMap(seed, depth, forcedLighting, forcedBiome);
+    console.log(`Floor ${depth} — preset: ${this.map.preset}, lighting: ${this.map.lighting}, biome: ${this.map.biome} (seed ${seed})`);
 
     // Bake props into a collision-only grid (walls + prop tiles solid, including
     // breakable ones — they start solid and are removed from collision on break).
@@ -661,6 +666,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       props: this.map.props.filter((p) => !p.breakable),
       exit: this.map.exit,
       lighting: this.map.lighting, // "bright" | "dark" | "torchlit" — drives the client vision
+      biome: this.map.biome, // depth biome (M15) — the client picks its tile sheet by this
       torches: this.map.torches, // wall-torch tiles (torchlit floors only; [] otherwise)
     };
   }

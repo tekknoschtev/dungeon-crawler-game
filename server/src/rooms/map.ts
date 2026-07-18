@@ -47,6 +47,25 @@ const DARK_CHANCE = 0.34;
 // dark slice). So past floor 1: ~34% dark, ~22% torchlit, the rest bright.
 const TORCHLIT_CHANCE = 0.22;
 
+/**
+ * Depth biome (M15) — a COSMETIC axis (unlike lighting): every ~5 floors the
+ * dungeon becomes a different place. Pure function of depth (no RNG draw, so
+ * adding biomes never perturbs seeded layouts). The client maps the name to a
+ * tile-sheet texture; bands whose art isn't built yet fall back to stone so
+ * the band table can lead the kits. Sent in the "map" message.
+ */
+export const BIOMES = ["stone", "overgrown", "crypt", "ember"] as const;
+export type Biome = (typeof BIOMES)[number];
+// Kits that exist as shipped sheets (see docs/biome-art-plan.md). Grow this as
+// crypt/ember land — the band table below already routes to them.
+const BUILT_BIOMES: ReadonlySet<Biome> = new Set(["stone", "overgrown"]);
+
+export function biomeForDepth(depth: number): Biome {
+  const band: Biome =
+    depth <= 4 ? "stone" : depth <= 9 ? "overgrown" : depth <= 14 ? "crypt" : "ember";
+  return BUILT_BIOMES.has(band) ? band : "stone";
+}
+
 const PRESETS: readonly FloorPreset[] = [
   // Many small rooms connected by a tangle of corridors. Cramped fights,
   // lots of crates to smash, easy to get lost.
@@ -170,6 +189,8 @@ export interface LoadedMap {
   preset: string;
   /** lighting mode for this floor; sent to clients so they render the vision bubble */
   lighting: Lighting;
+  /** depth biome for this floor (M15, cosmetic); the client picks its tile sheet by this */
+  biome: Biome;
   /** torchlit floors only: wall tiles (TILE coords) carrying a static torch. The
    *  client renders the sconce + a warm glow and adds each as an always-on light
    *  source. Empty on bright/dark floors. */
@@ -518,7 +539,12 @@ function carveVault(
  * `depth` only gates the lighting roll (floor 1 is never dark — see below); it
  * does not affect geometry, so the same seed yields the same layout at any depth.
  */
-export function loadMap(seed: number, depth = 1, forced?: Lighting): LoadedMap {
+export function loadMap(
+  seed: number,
+  depth = 1,
+  forced?: Lighting,
+  forcedBiome?: Biome
+): LoadedMap {
   const rand = mulberry32(seed);
   const randInt = (min: number, max: number) =>
     min + Math.floor(rand() * (max - min + 1));
@@ -651,5 +677,9 @@ export function loadMap(seed: number, depth = 1, forced?: Lighting): LoadedMap {
     secretLoot = secrets.loot;
   }
 
-  return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props, exit, vault, preset: preset.name, lighting, torches, secretLoot };
+  // Depth biome (M15): pure band lookup — deliberately NOT an RNG draw, so
+  // biome changes can never shift a seed's layout or lighting roll.
+  const biome = forcedBiome ?? biomeForDepth(depth);
+
+  return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props, exit, vault, preset: preset.name, lighting, biome, torches, secretLoot };
 }

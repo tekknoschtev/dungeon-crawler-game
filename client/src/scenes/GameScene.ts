@@ -54,6 +54,23 @@ const WALL_AUTOTILE: Record<number, number> = {
   [N | E | S | W]: 26,
 };
 
+// --- Depth biomes (M15) -------------------------------------------------
+// The server names a biome per floor ("map" message); geometry renders from
+// that biome's sheet — a full clone of the packed sheet with the wall/floor
+// kit re-derived, so every frame index matches. Sprites (heroes/mobs/loot/
+// props) keep TILES_KEY: their frames are identical across clones.
+const BIOME_TEXTURES: Record<string, string> = {
+  overgrown: "tiles-overgrown",
+};
+// Anti-tiling wall variants (extension row, fixed contract with
+// assets-src/biomes/build_biomes.py): alternate detail rolls of the brick
+// face (#40) and back edge (#26), hash-picked per map tile so long wall runs
+// don't wallpaper. Only biome sheets carry the extension row.
+const WALL_VARIANTS: Record<number, number[]> = {
+  40: [40, 132, 133, 134],
+  26: [26, 135, 136],
+};
+
 // Inner (concave) corners: a wall with no orthogonal floor but floor on a
 // diagonal still needs brick wrapping that corner, else it shows a void notch.
 // Diagonal bitmask: NW=8, NE=4, SE=2, SW=1 (from Kenney's sample map).
@@ -308,6 +325,7 @@ interface MapMessage {
   props: { x: number; y: number; frame: number }[]; // static furniture (server-placed)
   exit: { x: number; y: number }; // descent point in TILE coords
   lighting?: "bright" | "dark" | "torchlit"; // "dark"/"torchlit" → render the vision bubble
+  biome?: string; // depth biome (M15) — picks the geometry tile sheet
   torches?: { x: number; y: number }[]; // wall-torch tiles (torchlit floors); static light pools
 }
 
@@ -407,6 +425,9 @@ export class GameScene extends Phaser.Scene {
   // Per-player run discoveries from the last "gameover" message (M13), keyed by
   // sessionId; null outside the wipe score screen (a voluntary exit has none).
   private runTallies: Record<string, RunTally> | null = null;
+  // Texture key map geometry draws from — the current floor's biome sheet
+  // (M15); TILES_KEY (stone) until a "map" message says otherwise.
+  private mapTilesKey: string = TILES_KEY;
   // The codex fold-in for the run that just ended (M14): prev snapshot (drives
   // the NEW badges) + which personal bests broke. Set once per run end — it
   // doubles as the "already recorded" guard — and cleared with runTallies.
@@ -465,6 +486,13 @@ export class GameScene extends Phaser.Scene {
 
   preload() {
     this.load.spritesheet(TILES_KEY, "/assets/tiny-dungeon/tilemap_packed.png", {
+      frameWidth: TILE_SRC,
+      frameHeight: TILE_SRC,
+    });
+    // Biome sheets (M15): full clones of the packed sheet with the wall/floor
+    // kit re-derived per biome (see docs/biome-art-plan.md) plus an extension
+    // row of anti-tiling wall variants. Same grid, so frame indices line up.
+    this.load.spritesheet(BIOME_TEXTURES.overgrown, "/assets/tiny-dungeon/tilemap_overgrown.png", {
       frameWidth: TILE_SRC,
       frameHeight: TILE_SRC,
     });
@@ -1918,6 +1946,11 @@ export class GameScene extends Phaser.Scene {
     this.mapLayer.removeAll(true);
     const t = data.tile;
 
+    // Depth biome (M15): geometry renders from the biome's sheet clone; an
+    // unknown/absent biome (older server, un-built kit) falls back to stone.
+    const biomeKey = BIOME_TEXTURES[data.biome ?? ""];
+    this.mapTilesKey = biomeKey && this.textures.exists(biomeKey) ? biomeKey : TILES_KEY;
+
     const worldW = data.width * t;
     const worldH = data.height * t;
 
@@ -1985,6 +2018,11 @@ export class GameScene extends Phaser.Scene {
         let frame: number;
         if (mask !== 0) {
           frame = WALL_AUTOTILE[mask];
+          // Anti-tiling (M15): biome sheets carry alternate rolls of the face/
+          // back tiles in their extension row — hash-pick per tile (stable
+          // across clients) so long wall runs don't wallpaper one texture.
+          const variants = this.mapTilesKey !== TILES_KEY ? WALL_VARIANTS[frame] : undefined;
+          if (variants) frame = variants[Math.floor(tileHash(x, y, 5) * variants.length)];
         } else {
           // No orthogonal floor: a concave corner (floor only on a diagonal)
           // gets a wrapped brick tile; otherwise it's deep rock = brown void.
@@ -2256,10 +2294,11 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** Add one map tile image to the map layer and return it. */
+  /** Add one map tile image to the map layer and return it. Geometry draws
+   *  from the current floor's biome sheet (frame indices match the base). */
   private addCell(px: number, py: number, t: number, frame: number) {
     const cell = this.add
-      .image(px, py, TILES_KEY, frame)
+      .image(px, py, this.mapTilesKey, frame)
       .setOrigin(0)
       .setDisplaySize(t, t);
     this.mapLayer.add(cell);

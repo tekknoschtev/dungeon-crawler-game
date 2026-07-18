@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { loadMap, MAP_W, MAP_H, TILE, LIGHTING } from "./map";
+import { loadMap, MAP_W, MAP_H, TILE, LIGHTING, biomeForDepth } from "./map";
 
 /** Flood-fill the floor (0) cells reachable from a start tile; returns the count. */
 function reachableFloorCount(grid: number[][], startX: number, startY: number): number {
@@ -22,6 +22,39 @@ function totalFloor(grid: number[][]): number {
   for (const row of grid) for (const cell of row) if (cell === 0) n++;
   return n;
 }
+
+describe("biomeForDepth (M15)", () => {
+  it("maps the shallow band to stone", () => {
+    expect(biomeForDepth(1)).toBe("stone");
+    expect(biomeForDepth(4)).toBe("stone");
+  });
+
+  it("maps floors 5-9 to overgrown", () => {
+    expect(biomeForDepth(5)).toBe("overgrown");
+    expect(biomeForDepth(9)).toBe("overgrown");
+  });
+
+  it("falls back to stone for bands whose kits aren't built yet", () => {
+    // crypt (10-14) and ember (15+) route to stone until their sheets land;
+    // these pins FLIP when a kit ships — update them alongside BUILT_BIOMES.
+    expect(biomeForDepth(10)).toBe("stone");
+    expect(biomeForDepth(14)).toBe("stone");
+    expect(biomeForDepth(15)).toBe("stone");
+    expect(biomeForDepth(99)).toBe("stone");
+  });
+
+  it("never perturbs geometry: same seed, same layout at any biome depth", () => {
+    // Biome is a pure band lookup, not an RNG draw — depth already never
+    // affects geometry, and adding the biome must keep it that way.
+    expect(loadMap(4242, 1).grid).toEqual(loadMap(4242, 7).grid);
+  });
+
+  it("is carried on the loaded map and respects the dev override", () => {
+    expect(loadMap(11, 6).biome).toBe("overgrown");
+    expect(loadMap(11, 1).biome).toBe("stone");
+    expect(loadMap(11, 1, undefined, "overgrown").biome).toBe("overgrown");
+  });
+});
 
 describe("loadMap", () => {
   it("is deterministic for a given seed", () => {
