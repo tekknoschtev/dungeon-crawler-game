@@ -61,6 +61,7 @@ const WALL_AUTOTILE: Record<number, number> = {
 // props) keep TILES_KEY: their frames are identical across clones.
 const BIOME_TEXTURES: Record<string, string> = {
   overgrown: "tiles-overgrown",
+  crypt: "tiles-crypt",
 };
 // Anti-tiling wall variants (extension row, fixed contract with
 // assets-src/biomes/build_biomes.py): alternate detail rolls of the brick
@@ -493,6 +494,10 @@ export class GameScene extends Phaser.Scene {
     // kit re-derived per biome (see docs/biome-art-plan.md) plus an extension
     // row of anti-tiling wall variants. Same grid, so frame indices line up.
     this.load.spritesheet(BIOME_TEXTURES.overgrown, "/assets/tiny-dungeon/tilemap_overgrown.png", {
+      frameWidth: TILE_SRC,
+      frameHeight: TILE_SRC,
+    });
+    this.load.spritesheet(BIOME_TEXTURES.crypt, "/assets/tiny-dungeon/tilemap_crypt.png", {
       frameWidth: TILE_SRC,
       frameHeight: TILE_SRC,
     });

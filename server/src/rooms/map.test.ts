@@ -34,11 +34,14 @@ describe("biomeForDepth (M15)", () => {
     expect(biomeForDepth(9)).toBe("overgrown");
   });
 
+  it("maps floors 10-14 to crypt", () => {
+    expect(biomeForDepth(10)).toBe("crypt");
+    expect(biomeForDepth(14)).toBe("crypt");
+  });
+
   it("falls back to stone for bands whose kits aren't built yet", () => {
-    // crypt (10-14) and ember (15+) route to stone until their sheets land;
-    // these pins FLIP when a kit ships — update them alongside BUILT_BIOMES.
-    expect(biomeForDepth(10)).toBe("stone");
-    expect(biomeForDepth(14)).toBe("stone");
+    // ember (15+) routes to stone until its sheet lands; these pins FLIP when
+    // the kit ships — update them alongside BUILT_BIOMES.
     expect(biomeForDepth(15)).toBe("stone");
     expect(biomeForDepth(99)).toBe("stone");
   });

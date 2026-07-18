@@ -58,7 +58,7 @@ export const BIOMES = ["stone", "overgrown", "crypt", "ember"] as const;
 export type Biome = (typeof BIOMES)[number];
 // Kits that exist as shipped sheets (see docs/biome-art-plan.md). Grow this as
 // crypt/ember land — the band table below already routes to them.
-const BUILT_BIOMES: ReadonlySet<Biome> = new Set(["stone", "overgrown"]);
+const BUILT_BIOMES: ReadonlySet<Biome> = new Set(["stone", "overgrown", "crypt"]);
 
 export function biomeForDepth(depth: number): Biome {
   const band: Biome =
