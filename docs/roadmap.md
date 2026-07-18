@@ -115,6 +115,11 @@ M13 → M14 (M14's "NEW" badges hang off M13's panel); M15 is independent.
   gameplan — pipeline, review gates, per-kit checklists, estimates — lives in
   [`biome-art-plan.md`](biome-art-plan.md); build **pipeline + overgrown
   end-to-end first**, other kits follow as small PRs.
+  *Progress 2026-07-18:* pipeline + **overgrown kit shipped** (floors 5–9;
+  anti-tiling wall variants in the sheet's extension row, `DUNGEON_BIOME` dev
+  override, stone fallback for un-built bands). **Crypt + ember remain** — each
+  is a palette dict + detail rules in `assets-src/biomes/build_biomes.py`,
+  then flip `BUILT_BIOMES` in `map.ts` (and the fallback pins in `map.test.ts`).
 
 ## Comeback toolkit — deep-floor relief valves
 
