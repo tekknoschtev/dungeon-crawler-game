@@ -98,19 +98,23 @@ M13 → M14 (M14's "NEW" badges hang off M13's panel); M15 is independent.
 - **M15 — Depth biomes.** Every ~4–5 floors the dungeon *becomes a different
   place*: new floor/wall/prop art per depth band, layered on the existing
   archetype × lighting axes. **Real alternate tilesets, not tints of the
-  current art** (owner call, 2026-07-17). Sourcing direction: Kenney's other
-  "Tiny" packs — same 16×16 / 12-column packed-sheet format and flat style as
-  Tiny Dungeon; Tiny Town is already shipped (vault key) and has
-  grass/dirt/brick terrain, Tiny Battle / Tiny Ski cover sand and snow/ice.
-  **Verify before committing to a band list**: the pseudo-2.5D wall autotiler
-  needs face/side/shadow roles per biome, and the non-dungeon packs' wall tiles
-  may need adaptation — inspect the actual sheets (raw packs live under the
-  gitignored `assets-src/`) and pick bands from what the art supports. Server:
-  derive biome from depth band in `map.ts`, send it in the `"map"` message
-  (exactly like `lighting`); biome may also pick the prop/crate frame set.
-  Client: a per-biome frame-map table (role → sheet + frame) feeding the
-  existing autotiler. Log every new pack in `ATTRIBUTION.md`. Follow-ons
-  (unscheduled): biome-flavored mob-mix nudges, descend flavor text.
+  current art** (owner call, 2026-07-17). Server: derive biome from depth band
+  in `map.ts`, send it in the `"map"` message (exactly like `lighting`); biome
+  may also pick the prop/crate frame set. Client: a per-biome frame-map table
+  (role → sheet + frame) feeding the existing autotiler. Log every asset in
+  `ATTRIBUTION.md`. Follow-ons (unscheduled): biome-flavored mob-mix nudges,
+  descend flavor text.
+
+  **Art inspection findings (2026-07-17):** no pack on hand supplies a second
+  style-matched wall kit (Tiny Dungeon has exactly one; Tiny Town = floors/
+  props only; Tiny Battle + Roguelike-RPG ruled out), so **every non-stone
+  biome derives a custom kit** from Tiny Dungeon's — palette-LUT remap +
+  rule-placed detail pass, shipped as real PNG sheet clones (not runtime
+  tints; mocked and proven in `assets-src/biome_mock2.py`). Bands: 1–4 stone
+  (free) → 5–9 overgrown → 10–14 crypt → 15+ ember. The full production
+  gameplan — pipeline, review gates, per-kit checklists, estimates — lives in
+  [`biome-art-plan.md`](biome-art-plan.md); build **pipeline + overgrown
+  end-to-end first**, other kits follow as small PRs.
 
 ## Comeback toolkit — deep-floor relief valves
 
