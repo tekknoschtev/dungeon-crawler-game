@@ -2,6 +2,9 @@ import Phaser from "phaser";
 import { Room, getStateCallbacks } from "@colyseus/sdk";
 import { VIEW_W, VIEW_H, TILE, RECONNECT_KEY } from "../config";
 import { MoveIntent, MOVE_INTENT_KEY, BOMB_COUNT_KEY } from "./UIScene";
+// Local codex + personal bests (M14): the browser's memory of every run, and
+// what makes a "NEW" badge / best-flash on the score screen mean something.
+import { recordRunEnd, RunRecordResult } from "../codex";
 
 // Tiny Dungeon art (Kenney, CC0). The packed sheet is 16x16 tiles, 12 columns,
 // no spacing, so a tile's frame index = row * 12 + column. See ATTRIBUTION.md.
@@ -404,6 +407,10 @@ export class GameScene extends Phaser.Scene {
   // Per-player run discoveries from the last "gameover" message (M13), keyed by
   // sessionId; null outside the wipe score screen (a voluntary exit has none).
   private runTallies: Record<string, RunTally> | null = null;
+  // The codex fold-in for the run that just ended (M14): prev snapshot (drives
+  // the NEW badges) + which personal bests broke. Set once per run end — it
+  // doubles as the "already recorded" guard — and cleared with runTallies.
+  private codexResult: RunRecordResult | null = null;
 
   // --- Dark-floor vision (server-rolled "dark" lighting) ------------------
   // When true, the floor renders only what a hero's light reaches: geometry you've
@@ -584,6 +591,7 @@ export class GameScene extends Phaser.Scene {
       "gameover",
       ({ floor, tallies }) => {
         this.runTallies = tallies ?? null;
+        this.recordLocalRunEnd(floor); // fold into the local codex BEFORE rendering
         this.setGameOverOverlay(true, floor);
       }
     );
@@ -1600,6 +1608,7 @@ export class GameScene extends Phaser.Scene {
       // Restart returned us to play — drop the overlay, offer the exit again.
       el.hidden = true;
       this.runTallies = null; // fresh run, fresh discoveries
+      this.codexResult = null; // re-arms the codex record for the next run end
       this.setExitButtonVisible(true);
       return;
     }
@@ -1612,6 +1621,7 @@ export class GameScene extends Phaser.Scene {
     if (restart) restart.hidden = false;
     const back = document.getElementById("backmenu-btn");
     if (back) back.hidden = true;
+    this.updateBestFlash();
     this.buildScoreTable();
     // The party is wiped — the per-player downed overlay gives way to this, and
     // there's nothing left to leave, so hide the exit button.
@@ -1675,6 +1685,10 @@ export class GameScene extends Phaser.Scene {
     if (title) title.textContent = "You left the dungeon";
     const sub = document.getElementById("gameover-sub");
     if (sub) sub.textContent = floor !== undefined ? `Left on Floor ${floor}` : "";
+    // A voluntary exit ends the run too — it counts toward the codex (no wipe
+    // tallies were sent, so only score/floor/relics contribute).
+    this.recordLocalRunEnd(floor ?? 1);
+    this.updateBestFlash();
     this.buildScoreTable();
     // Restart is party-wide — wrong for a solo leaver; offer Back to menu instead.
     const restart = document.getElementById("restart-btn");
@@ -1690,6 +1704,44 @@ export class GameScene extends Phaser.Scene {
   /** Leave the scorecard for a clean lobby (strip ?room=/?pubid= so we don't auto-rejoin). */
   private backToMenu() {
     window.location.href = window.location.origin + window.location.pathname;
+  }
+
+  /**
+   * Fold the local hero's finished run into the browser codex (M14), once per
+   * run end — both the wipe and the voluntary exit route here. Stashes the
+   * result for the NEW badges + best-flash the score screen renders.
+   */
+  private recordLocalRunEnd(floor: number) {
+    if (this.codexResult) return; // this run end is already recorded
+    const players = (this.room?.state as { players?: Map<string, PlayerView> } | undefined)?.players;
+    const p = players?.get(this.localId);
+    if (!p) return;
+    const tally = this.runTallies?.[this.localId];
+    this.codexResult = recordRunEnd({
+      score: p.score ?? 0,
+      floor,
+      weapons: tally?.weapons ?? [],
+      kinds: tally ? Object.keys(tally.kills) : [],
+      relics: Array.from(p.relics ?? []),
+    });
+  }
+
+  /** The "★ new personal best" line under the scorecard subtitle (M14). */
+  private updateBestFlash() {
+    const el = document.getElementById("pb-line");
+    if (!el) return;
+    const r = this.codexResult;
+    if (r?.newBestScore && r?.newDeepestFloor) {
+      el.textContent = "★ New best score — and your deepest floor yet!";
+    } else if (r?.newBestScore) {
+      el.textContent = "★ New personal best score!";
+    } else if (r?.newDeepestFloor) {
+      el.textContent = "★ Your deepest floor yet!";
+    } else {
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
   }
 
   /** Render the score rows (name + score, sorted desc) and the party total. */
@@ -1721,6 +1773,10 @@ export class GameScene extends Phaser.Scene {
       row.append(name, val);
       list.appendChild(row);
 
+      // First-ever discoveries get a NEW badge (M14) — but the codex is this
+      // browser's memory, so only the local hero's row can be badged against it.
+      const prev = r.id === this.localId ? this.codexResult?.prev : undefined;
+
       // The hero's vault relics, listed small + dimmed beneath their row.
       if (r.relics.length > 0) {
         const relics = document.createElement("div");
@@ -1728,6 +1784,7 @@ export class GameScene extends Phaser.Scene {
         for (const name of r.relics) {
           const tag = document.createElement("span");
           tag.className = "relic-tag";
+          if (prev && !prev.relics.includes(name)) tag.classList.add("disc-new");
           tag.textContent = `✦ ${name}`; // server-built name — still textContent
           relics.appendChild(tag);
         }
@@ -1738,7 +1795,7 @@ export class GameScene extends Phaser.Scene {
       // ships tallies with "gameover"); a voluntary exit shows the plain board.
       const tally = this.runTallies?.[r.id];
       if (tally) {
-        const disc = this.buildDiscoveryLines(tally);
+        const disc = this.buildDiscoveryLines(tally, prev);
         if (disc) list.appendChild(disc);
       }
     }
@@ -1747,22 +1804,54 @@ export class GameScene extends Phaser.Scene {
 
   /**
    * The run's museum for one hero (M13): compact "Wielded / Slain / Hauled" lines
-   * under their score row. Everything is server-built strings and counts —
-   * rendered via textContent only. Returns null when the run logged nothing.
+   * under their score row. Items are built as spans so a first-ever discovery
+   * (per `prev`, the local codex before this run — M14) can carry a NEW badge;
+   * all values still land via textContent only. Null when the run logged nothing.
    */
-  private buildDiscoveryLines(tally: RunTally): HTMLElement | null {
-    const lines: string[] = [];
+  private buildDiscoveryLines(
+    tally: RunTally,
+    prev?: { weapons: string[]; kinds: string[] }
+  ): HTMLElement | null {
+    // One line = a label + items; an item marked new gets the .disc-new badge.
+    const makeLine = (label: string, items: { text: string; isNew: boolean }[]): HTMLElement => {
+      const line = document.createElement("div");
+      line.className = "disc-line";
+      line.append(`${label}: `);
+      items.forEach(({ text, isNew }, i) => {
+        if (i > 0) line.append(" · ");
+        const item = document.createElement("span");
+        if (isNew) item.className = "disc-new";
+        item.textContent = text;
+        line.appendChild(item);
+      });
+      return line;
+    };
+    const lines: HTMLElement[] = [];
 
     if (tally.weapons.length > 0) {
-      lines.push(`Wielded: ${tally.weapons.join(" · ")}`);
+      lines.push(
+        makeLine(
+          "Wielded",
+          tally.weapons.map((w) => ({ text: w, isNew: !!prev && !prev.weapons.includes(w) }))
+        )
+      );
     }
 
     const kills = Object.entries(tally.kills).sort((a, b) => b[1] - a[1]);
     if (kills.length > 0) {
-      lines.push(`Slain: ${kills.map(([kind, n]) => `${kind} ×${n}`).join(" · ")}`);
+      lines.push(
+        makeLine(
+          "Slain",
+          kills.map(([kind, n]) => ({
+            text: `${kind} ×${n}`,
+            isNew: !!prev && !prev.kinds.includes(kind),
+          }))
+        )
+      );
     }
 
     // Haul: total drops grabbed, calling out the rare+ finds; plus crates/vaults.
+    // Counts aren't discoveries, so no badges here.
     const lootTotal = Object.values(tally.loot).reduce((sum, n) => sum + n, 0);
     const notable = ["legendary", "epic", "rare"]
       .filter((rar) => (tally.loot[rar] ?? 0) > 0)
@@ -1773,17 +1862,14 @@ export class GameScene extends Phaser.Scene {
     }
     if (tally.crates > 0) haul.push(`${tally.crates} ${tally.crates === 1 ? "crate" : "crates"}`);
     if (tally.chests > 0) haul.push(`${tally.chests} ${tally.chests === 1 ? "vault" : "vaults"}`);
-    if (haul.length > 0) lines.push(`Hauled: ${haul.join(" · ")}`);
+    if (haul.length > 0) {
+      lines.push(makeLine("Hauled", haul.map((text) => ({ text, isNew: false }))));
+    }
 
     if (lines.length === 0) return null;
     const el = document.createElement("div");
     el.className = "score-discoveries";
-    for (const text of lines) {
-      const line = document.createElement("div");
-      line.className = "disc-line";
-      line.textContent = text;
-      el.appendChild(line);
-    }
+    for (const line of lines) el.appendChild(line);
     return el;
   }
 

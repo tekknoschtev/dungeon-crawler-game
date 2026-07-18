@@ -467,6 +467,34 @@
         font-variant-numeric: tabular-nums;
         font-weight: 600;
       }
+      /* "★ New personal best" flash on the scorecard (M14). */
+      .pb-line {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent);
+        margin: -10px 0 14px; /* tucks up under .co-sub's 16px gap */
+      }
+      .pb-line[hidden] {
+        display: none;
+      }
+      /* Lobby line: personal bests from the browser codex (M14). */
+      .codex-line {
+        font-size: 12px;
+        color: var(--muted);
+        margin: -4px 0 10px;
+      }
+      /* First-ever discovery (M14): accent the item + a tiny NEW tag. */
+      .disc-new {
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .disc-new::after {
+        content: "NEW";
+        margin-left: 3px;
+        font-size: 8px;
+        letter-spacing: 0.5px;
+        vertical-align: 2px;
+      }
       /* Run discoveries under a player's score row (M13) — Wielded/Slain/Hauled. */
       .score-discoveries {
         display: flex;
@@ -661,6 +689,8 @@
     <div id="menu" class="overlay">
       <div class="panel">
         <h1>⚔ Dungeon Crawler</h1>
+        <!-- Personal bests from the browser codex (M14); hidden until a run ends. -->
+        <p id="codex-line" class="codex-line" hidden></p>
         <p id="hint" class="hint" hidden></p>
         <label>
           Name
@@ -750,6 +780,8 @@
       <div class="co-card">
         <div id="gameover-title" class="co-title">Your party fell</div>
         <div id="gameover-sub" class="co-sub"></div>
+        <!-- "★ New personal best" flash (M14) — shown only when a record broke. -->
+        <div id="pb-line" class="pb-line" hidden></div>
         <div id="score-board">
           <div id="score-list"></div>
           <div class="score-row total">

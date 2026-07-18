@@ -11,6 +11,8 @@ import {
   NO_COLOR,
   HERO_SPRITES,
 } from "../../server/src/rooms/heroAppearance";
+// Personal bests from the browser codex (M14) — shown as a lobby line.
+import { loadCodex } from "./codex";
 
 // Friendly join code shape — must match the server (DungeonRoom CODE_ALPHABET).
 const CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}$/;
@@ -79,6 +81,7 @@ export async function startLobby() {
 
   nameInput.value = `Hero-${Math.floor(Math.random() * 1000)}`;
 
+  showCodexLine();
   setupHeroPicker();
 
   // Force the code field to the canonical uppercase alphabet as the user types.
@@ -139,6 +142,27 @@ export async function startLobby() {
 
 function playerName(raw: string): string {
   return raw.trim().slice(0, 16) || `Hero-${Math.floor(Math.random() * 1000)}`;
+}
+
+/**
+ * The lobby's personal-bests line (M14), read from the browser codex. Hidden
+ * until at least one run has ended on this browser — a fresh player sees the
+ * clean lobby, a returning one sees the record to beat.
+ */
+function showCodexLine() {
+  const codex = loadCodex();
+  if (codex.runs <= 0) return;
+  const parts = [
+    `Best ${codex.bestScore.toLocaleString()}`,
+    `Deepest floor ${codex.deepestFloor}`,
+    `${codex.runs} ${codex.runs === 1 ? "run" : "runs"}`,
+  ];
+  if (codex.relics.length > 0) {
+    parts.push(`✦ ${codex.relics.length} ${codex.relics.length === 1 ? "relic" : "relics"}`);
+  }
+  const el = $<HTMLParagraphElement>("codex-line");
+  el.textContent = parts.join(" · ");
+  el.hidden = false;
 }
 
 /**
