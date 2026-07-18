@@ -50,6 +50,9 @@ Mobile-first, drop-in **co-op dive**. The loop:
 | **M10** | Collectible bomb — crate-dropped (rubber-banded deeper); place with E / contextual mobile button → local blast (hurts the placer) + map-wide stun | [#27](https://github.com/tekknoschtev/dungeon-crawler-game/pull/27) |
 | **M11** | Exit pulse — channeling the descent wards the ladder (knockback + stagger pulses), so racing to the stairs works *under fire* | [#29](https://github.com/tekknoschtev/dungeon-crawler-game/pull/29) |
 | — | Floor-lighting arc — dark floors (hero-light vision bubble), torchlit floors + secrets in the shadows, co-op vision (per-hero tint + downed distress beacon) | [#31](https://github.com/tekknoschtev/dungeon-crawler-game/pull/31), [#32](https://github.com/tekknoschtev/dungeon-crawler-game/pull/32), [#33](https://github.com/tekknoschtev/dungeon-crawler-game/pull/33) |
+| **M13** | Run-end discoveries panel — the score screen becomes the run's museum (relics, weapons, bestiary, haul) | [#34](https://github.com/tekknoschtev/dungeon-crawler-game/pull/34) |
+| **M14** | Local codex + personal bests — localStorage bests/lifetime codex; lobby line, best-flash, NEW badges | [#35](https://github.com/tekknoschtev/dungeon-crawler-game/pull/35) |
+| **M15** | Depth biomes — derived tile kits per band (overgrown 5–9, crypt 10–14, ember 15+) with anti-tiling wall variants; README biome showcase | [#37](https://github.com/tekknoschtev/dungeon-crawler-game/pull/37), [#38](https://github.com/tekknoschtev/dungeon-crawler-game/pull/38) + ember PR |
 | — | Mobile HUD placement fix (stat HUD off the touch controls) | [#14](https://github.com/tekknoschtev/dungeon-crawler-game/pull/14) |
 
 Earlier systems already in place (not re-listed as backlog): CC0 art pass
@@ -69,57 +72,18 @@ each lives.
   emit it on server start + as a client-visible value so it's easy to confirm the
   latest build is actually running in prod.
 
-### Engagement arc (M13–M15) — planned 2026-07-17
+### Engagement arc (M13–M15) — SHIPPED 2026-07-17/18
 
-The theme: depth is currently only a number — nothing marks the journey. These
-make descending feel like going *somewhere* and give runs a memory. Build order
-M13 → M14 (M14's "NEW" badges hang off M13's panel); M15 is independent.
-
-- **M13 — Run-end discoveries panel.** The score screen becomes the run's
-  museum: the relics claimed (they're procedurally-named trophies and nothing
-  displays them prominently today), weapons wielded, a bestiary tally of kinds
-  slain, floors survived, crates smashed. Server side: accumulate per-player run
-  tallies in the existing non-synced `Combat` record (kills by kind, weapons
-  held, loot by rarity, chests opened) and ship them **once in the `"gameover"`
-  message payload** — no new `@type` state, zero per-tick cost (relics are
-  already synced). Client side: score-screen layout work, mobile-first. This
-  absorbs the long-deferred **score-screen polish** owner ask.
-
-- **M14 — Local codex + personal bests (client-only).** `localStorage`
-  (versioned key, per-browser by design — in bounds per the refined arcade
-  rule). Two layers: **bests** (high score, deepest floor, runs played) and a
-  **lifetime codex** (weapons ever held, mob kinds ever slain, best relic
-  rarity + named-relic collection). Surfaces: a "Best: … · Deepest: floor …"
-  line in the lobby, "NEW BEST" flashes on the score screen, and **NEW** badges
-  in M13's panel when a run logs a first-ever discovery ("you've never held a
-  warhammer" is a descend motivator). No server changes; the minimal in-run HUD
-  is untouched — lobby and score screen only.
-
-- **M15 — Depth biomes.** Every ~4–5 floors the dungeon *becomes a different
-  place*: new floor/wall/prop art per depth band, layered on the existing
-  archetype × lighting axes. **Real alternate tilesets, not tints of the
-  current art** (owner call, 2026-07-17). Server: derive biome from depth band
-  in `map.ts`, send it in the `"map"` message (exactly like `lighting`); biome
-  may also pick the prop/crate frame set. Client: a per-biome frame-map table
-  (role → sheet + frame) feeding the existing autotiler. Log every asset in
-  `ATTRIBUTION.md`. Follow-ons (unscheduled): biome-flavored mob-mix nudges,
-  descend flavor text.
-
-  **Art inspection findings (2026-07-17):** no pack on hand supplies a second
-  style-matched wall kit (Tiny Dungeon has exactly one; Tiny Town = floors/
-  props only; Tiny Battle + Roguelike-RPG ruled out), so **every non-stone
-  biome derives a custom kit** from Tiny Dungeon's — palette-LUT remap +
-  rule-placed detail pass, shipped as real PNG sheet clones (not runtime
-  tints; mocked and proven in `assets-src/biome_mock2.py`). Bands: 1–4 stone
-  (free) → 5–9 overgrown → 10–14 crypt → 15+ ember. The full production
-  gameplan — pipeline, review gates, per-kit checklists, estimates — lives in
-  [`biome-art-plan.md`](biome-art-plan.md); build **pipeline + overgrown
-  end-to-end first**, other kits follow as small PRs.
-  *Progress 2026-07-18:* pipeline + **overgrown kit shipped** (floors 5–9;
-  anti-tiling wall variants in the sheet's extension row, `DUNGEON_BIOME` dev
-  override, stone fallback for un-built bands). **Crypt + ember remain** — each
-  is a palette dict + detail rules in `assets-src/biomes/build_biomes.py`,
-  then flip `BUILT_BIOMES` in `map.ts` (and the fallback pins in `map.test.ts`).
+Depth used to be only a number; this arc made descending feel like going
+*somewhere* and gave runs a memory. All three milestones are in the
+[Shipped](#shipped) table: **M13** discoveries panel (#34), **M14** local
+codex + bests (#35), **M15** depth biomes (#37, #38 + ember) — three derived
+tile kits (overgrown / crypt / ember) with anti-tiling wall variants, plus
+README biome screenshots. The biome production pipeline + review gates live
+in [`biome-art-plan.md`](biome-art-plan.md) (tooling in `assets-src/biomes/`;
+a fourth biome = one palette dict + detail rules). Unscheduled follow-ons:
+biome-flavored mob-mix nudges, descend flavor text, biome prop sets, optional
+owner hand-polish passes on the shipped sheets.
 
 ## Comeback toolkit — deep-floor relief valves
 

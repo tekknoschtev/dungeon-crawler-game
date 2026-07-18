@@ -39,11 +39,9 @@ describe("biomeForDepth (M15)", () => {
     expect(biomeForDepth(14)).toBe("crypt");
   });
 
-  it("falls back to stone for bands whose kits aren't built yet", () => {
-    // ember (15+) routes to stone until its sheet lands; these pins FLIP when
-    // the kit ships — update them alongside BUILT_BIOMES.
-    expect(biomeForDepth(15)).toBe("stone");
-    expect(biomeForDepth(99)).toBe("stone");
+  it("maps floors 15+ to ember — every band's kit is built", () => {
+    expect(biomeForDepth(15)).toBe("ember");
+    expect(biomeForDepth(99)).toBe("ember");
   });
 
   it("never perturbs geometry: same seed, same layout at any biome depth", () => {

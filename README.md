@@ -3,6 +3,27 @@
 A co-op, top-down, real-time dungeon crawler. The whole thing runs in the
 browser — easy to share with a link, plays on a phone, no installer.
 
+Dive as a team. Staying on a floor floods you with monsters; descending
+multiplies your score. A party wipe ends the run — how deep can you get?
+
+## The descent
+
+Depth changes the dungeon: every few floors the party crosses into a new
+biome. Same brutal arcade dive, different place.
+
+| Stone halls (floors 1–4) | Overgrown (floors 5–9) |
+|---|---|
+| ![Stone halls](docs/screenshots/biome-stone.png) | ![Overgrown](docs/screenshots/biome-overgrown.png) |
+
+| Crypt (floors 10–14) | Ember depths (floors 15+) |
+|---|---|
+| ![Crypt](docs/screenshots/biome-crypt.png) | ![Ember depths](docs/screenshots/biome-ember.png) |
+
+On top of the biomes: dark floors where you fight inside your own lantern
+light, torchlit floors with secrets hiding in the shadows between sconces, a
+timed vault chest guarding named relics, and a score screen that remembers
+what you discovered.
+
 **Stack**
 
 - **Client:** Phaser 3.90 + TypeScript + Vite
@@ -59,18 +80,14 @@ dungeon-crawler-game/
 
 ---
 
-## Milestone status
+## Where the game is
 
-- [x] **M1 — Co-op skeleton.** Two+ players join a shared room and move around
-      with synced, server-authoritative positions and wall collision.
-      *(Placeholder geometric art — real sprites land in M2.)*
-- [ ] **M2 — Looks like a dungeon.** Drop in CC0 tile/character art, a proper
-      tilemap, hero facing/animation, camera follow for bigger rooms.
-- [ ] **M3 — Mobs + combat.** First enemy type, attacks, HP, death/respawn.
-- [ ] **M4 — Loot.** Drops, pickups, a shared/own inventory, rarity tiers.
-- [ ] **M5 — Floors.** Multiple levels, a stairs/exit, simple progression.
-
-See `CLAUDE.md` for conventions and the working backlog.
+Well past the skeleton: it's a mobile-first arcade co-op dive — mob pressure
+that ramps with time on the floor, heat-multiplied scoring, lives / revives /
+party wipes, a timed vault chest with procedurally named relics, Quick Play
+matchmaking, floor-lighting variety (dark + torchlit), depth biomes, and a
+local codex of personal bests. The single source of truth for what's built
+and what's next is [docs/roadmap.md](docs/roadmap.md).
 
 ---
 
