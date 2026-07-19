@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { loadMap, MAP_W, MAP_H, TILE, LIGHTING, biomeForDepth } from "./map";
+import { loadMap, MAP_W, MAP_H, TILE, LIGHTING, BIOMES, biomeForDepth } from "./map";
 
 /** Flood-fill the floor (0) cells reachable from a start tile; returns the count. */
 function reachableFloorCount(grid: number[][], startX: number, startY: number): number {
@@ -53,10 +53,13 @@ describe("biomeForDepth (M15)", () => {
     }
   });
 
-  it("never perturbs geometry: same seed, same layout at any biome depth", () => {
-    // Biome is a pure band lookup, not an RNG draw — depth already never
-    // affects geometry, and adding the biome must keep it that way.
-    expect(loadMap(4242, 1).grid).toEqual(loadMap(4242, 7).grid);
+  it("pins geometry per (seed, biome): identical layouts within a band", () => {
+    // Floorplans milestone: the biome SHAPES the floor, so layouts are pinned
+    // within a band (same seed + same biome ⇒ identical grid), not across
+    // bands the way they were when biome was pure cosmetics.
+    expect(loadMap(4242, 1).grid).toEqual(loadMap(4242, 4).grid); // stone band
+    expect(loadMap(4242, 5).grid).toEqual(loadMap(4242, 9).grid); // overgrown band
+    expect(loadMap(4242, 10).grid).toEqual(loadMap(4242, 14).grid); // crypt band
   });
 
   it("is carried on the loaded map and respects the dev override", () => {
@@ -182,16 +185,17 @@ describe("loadMap", () => {
     expect(modes).toEqual(new Set(["bright", "dark", "torchlit"]));
   });
 
-  it("ignores depth for geometry — only lighting (and its torchlit secrets) changes", () => {
-    // Same seed at different depths must yield the identical GEOMETRY (grid +
-    // spawns are rolled before the depth-sensitive lighting roll). Props can differ
-    // only because torchlit floors seed secret caches; force the same mode and the
-    // full prop layout matches across depths too.
+  it("ignores depth for geometry within a band — only lighting (and its torchlit secrets) changes", () => {
+    // Same seed at different depths OF THE SAME BIOME BAND must yield the
+    // identical GEOMETRY (grid + spawns are rolled before the depth-sensitive
+    // lighting roll). Props can differ only because torchlit floors seed secret
+    // caches; force the same mode and the full prop layout matches too.
     const a = loadMap(2024, 1);
-    const b = loadMap(2024, 5);
+    const b = loadMap(2024, 4); // both stone (floors 1-4)
     expect(a.grid).toEqual(b.grid);
     expect(a.spawns).toEqual(b.spawns);
-    expect(loadMap(2024, 1, "bright").props).toEqual(loadMap(2024, 5, "bright").props);
+    expect(loadMap(2024, 1, "bright").props).toEqual(loadMap(2024, 4, "bright").props);
+    expect(loadMap(2024, 5, "bright").props).toEqual(loadMap(2024, 9, "bright").props); // overgrown band too
   });
 
   it("leaves no wall nub touching floor on 3+ orthogonal sides", () => {
@@ -210,6 +214,185 @@ describe("loadMap", () => {
       for (let y = 1; y < MAP_H - 1; y++) {
         for (let x = 1; x < MAP_W - 1; x++) {
           if (grid[y][x] === 1) expect(floorNeighbors(x, y)).toBeLessThan(3);
+        }
+      }
+    }
+  });
+});
+
+describe("biome floorplans (PR A: weights + plumbing)", () => {
+  const SEEDS = [1, 7, 42, 777, 2024, 31337];
+  /** djb2 over the grid — the same fingerprint used to capture the pins below. */
+  const gridHash = (grid: number[][]): number => {
+    let h = 5381;
+    for (const row of grid) for (const c of row) h = ((h * 33) ^ c) >>> 0;
+    return h;
+  };
+
+  it("stone regression: floors 1-4 keep the pre-floorplans layouts, seed-for-seed", () => {
+    // Fingerprints captured from the generator BEFORE the floorplans milestone
+    // (main @ 3ddb76b). If one of these moves, stone drifted — that's a bug by
+    // definition: stone is the untouched baseline (design rule 2 in
+    // docs/biome-floorplans-plan.md). Covers all three legacy archetypes.
+    const pins: [number, number, string][] = [
+      [1, 1994636293, "standard"],
+      [7, 3055064068, "warren"],
+      [42, 4151813796, "standard"],
+      [777, 4170641893, "hall"],
+      [2024, 3248936389, "hall"],
+      [31337, 626201508, "hall"],
+    ];
+    for (const [seed, hash, preset] of pins) {
+      const m = loadMap(seed, 2, "bright"); // depth 2 = stone band
+      expect(m.preset).toBe(preset);
+      expect(gridHash(m.grid)).toBe(hash);
+    }
+  });
+
+  it("is deterministic per (seed, biome) — every co-op client and re-run agrees", () => {
+    for (const biome of BIOMES) {
+      expect(loadMap(4242, 2, undefined, biome)).toEqual(loadMap(4242, 2, undefined, biome));
+    }
+  });
+
+  it("gives every non-stone biome a structural fingerprint distinct from stone", () => {
+    // Not guaranteed per seed (a biome can roll the same archetype as stone) —
+    // but across a spread of seeds every biome must reshape at least some floors.
+    for (const biome of BIOMES) {
+      if (biome === "stone") continue;
+      let differs = 0;
+      for (let s = 0; s < 20; s++) {
+        if (gridHash(loadMap(s, 2, "bright", biome).grid) !== gridHash(loadMap(s, 2, "bright").grid)) {
+          differs++;
+        }
+      }
+      expect(differs).toBeGreaterThan(0);
+    }
+  });
+
+  it("changes shape ONLY via the weight table: same archetype as stone ⇒ stone's exact grid", () => {
+    // PR A ships no quirks (the quirk hook is a no-op and draws from a second
+    // RNG stream), so when a biome's weighted pick lands on the same archetype
+    // stone would roll, every subsequent main-stream draw lines up and the grid
+    // must be identical. PR B's quirks will deliberately break this for their
+    // biomes — this pin gets replaced by per-quirk tests then.
+    let matched = 0;
+    for (let s = 0; s < 40; s++) {
+      const stone = loadMap(s, 2, "bright");
+      const flesh = loadMap(s, 2, "bright", "flesh");
+      if (flesh.preset === stone.preset) {
+        matched++;
+        expect(flesh.grid).toEqual(stone.grid);
+      }
+    }
+    expect(matched).toBeGreaterThan(0);
+  });
+
+  it("weights the archetype roll per biome (deterministic over a fixed seed sweep)", () => {
+    const N = 80;
+    const dist = (biome: (typeof BIOMES)[number]) => {
+      const counts: Record<string, number> = {};
+      for (let s = 0; s < N; s++) {
+        const p = loadMap(s, 2, "bright", biome).preset;
+        counts[p] = (counts[p] ?? 0) + 1;
+      }
+      return counts;
+    };
+
+    const overgrown = dist("overgrown"); // 45/35/20 — warren-leaning
+    expect(overgrown.warren).toBeGreaterThan(overgrown.hall ?? 0);
+    expect(overgrown.catacombs).toBeUndefined();
+
+    const crypt = dist("crypt"); // catacombs half the floors
+    expect(crypt.catacombs).toBeGreaterThan(N * 0.3);
+
+    const ember = dist("ember"); // 15/35/50 — hall-leaning
+    expect(ember.hall).toBeGreaterThan(ember.warren ?? 0);
+
+    const frost = dist("frost"); // 10/25/65 glacial
+    expect(frost.glacial).toBeGreaterThan(N * 0.45);
+    expect(frost.hall).toBeUndefined(); // glacial replaces the base hall
+
+    const goldvault = dist("goldvault"); // 0/20/80 treasury — never a warren
+    expect(goldvault.warren).toBeUndefined();
+    expect(goldvault.treasury).toBeGreaterThan(N * 0.6);
+
+    const flesh = dist("flesh"); // 70/20/10 — a warren of guts
+    expect(flesh.warren).toBeGreaterThan(N * 0.5);
+  });
+
+  it("keeps the biome-only presets off stone floors", () => {
+    for (let s = 0; s < 80; s++) {
+      expect(["warren", "standard", "hall"]).toContain(loadMap(s, 2, "bright").preset);
+    }
+  });
+
+  it("caps catacombs at few small rooms and glacial at few grand ones", () => {
+    // spawns are 1:1 with accepted rooms, so they expose the room count.
+    let cataSeen = 0, glacialSeen = 0;
+    for (let s = 0; s < 60; s++) {
+      const crypt = loadMap(s, 2, "bright", "crypt");
+      if (crypt.preset === "catacombs") {
+        cataSeen++;
+        expect(crypt.spawns.length).toBeLessThanOrEqual(8);
+        expect(crypt.spawns.length).toBeGreaterThan(1);
+      }
+      const frost = loadMap(s, 2, "bright", "frost");
+      if (frost.preset === "glacial") {
+        glacialSeen++;
+        expect(frost.spawns.length).toBeLessThanOrEqual(6);
+      }
+    }
+    expect(cataSeen).toBeGreaterThan(0);
+    expect(glacialSeen).toBeGreaterThan(0);
+  });
+
+  it("makes treasury floors visibly crate-rich next to a plain hall", () => {
+    // Same seed, same hall-family geometry — the treasury's cranked propChance
+    // must actually show up as more furniture to smash.
+    let compared = 0;
+    for (let s = 0; s < 40; s++) {
+      const stone = loadMap(s, 2, "bright");
+      const gold = loadMap(s, 2, "bright", "goldvault");
+      if (stone.preset === "hall" && gold.preset === "treasury") {
+        compared++;
+        expect(gold.props.length).toBeGreaterThan(stone.props.length);
+      }
+    }
+    expect(compared).toBeGreaterThan(0);
+  });
+
+  it("keeps every biome fully connected with props solid, and nub-free", () => {
+    // Design rule 5: connectivity is provable per biome. The quirk hook is a
+    // no-op today, but this sweep is the harness PR B/C quirks must pass.
+    for (const biome of BIOMES) {
+      for (const seed of SEEDS) {
+        const { grid, spawns, props } = loadMap(seed, 2, "bright", biome);
+        const blocked = new Set(props.map((p) => `${p.x},${p.y}`));
+        expect(blocked.size).toBe(props.length);
+        const start = spawns[0];
+        const seen = new Set<string>();
+        const stack: [number, number][] = [[Math.floor(start.x / TILE), Math.floor(start.y / TILE)]];
+        while (stack.length) {
+          const [x, y] = stack.pop()!;
+          if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) continue;
+          const key = `${x},${y}`;
+          if (grid[y][x] !== 0 || blocked.has(key) || seen.has(key)) continue;
+          seen.add(key);
+          stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+        }
+        expect(seen.size).toBe(totalFloor(grid) - props.length);
+        // No wall nub touching floor on 3+ orthogonal sides, whatever the preset.
+        for (let y = 1; y < MAP_H - 1; y++) {
+          for (let x = 1; x < MAP_W - 1; x++) {
+            if (grid[y][x] !== 1) continue;
+            const fn =
+              (grid[y - 1][x] === 0 ? 1 : 0) +
+              (grid[y + 1][x] === 0 ? 1 : 0) +
+              (grid[y][x - 1] === 0 ? 1 : 0) +
+              (grid[y][x + 1] === 0 ? 1 : 0);
+            expect(fn).toBeLessThan(3);
+          }
         }
       }
     }
