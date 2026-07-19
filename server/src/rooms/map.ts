@@ -218,19 +218,175 @@ function hashString(s: string): number {
  * never the main one, so a quirk can never shift room placement, corridor
  * flips, or the lighting roll of a given seed.
  *
- * PR A ships the scaffold only; the quirks land next (docs/biome-floorplans-plan.md):
- *  - PR B (floor-opening, connectivity-safe by construction): overgrown root
- *    breaches, crypt burial niches, flesh organic bulges.
- *  - PR C (adds walls, needs containment tests): ember scorched chasms, plus
- *    the goldvault treasury fill.
+ * The PR B quirks below only ever turn wall INTO floor, so they cannot
+ * disconnect anything — connectivity is safe by construction. PR C adds the
+ * wall-adding quirks (ember scorched chasms + the goldvault treasury fill),
+ * which need containment guarantees instead. Frost has no carve quirk on
+ * purpose: its big glacial halls (the GLACIAL preset) ARE the quirk.
+ *
+ * Exported for direct unit tests of each quirk's contract (map.test.ts).
  */
-function applyBiomeQuirks(
+export function applyBiomeQuirks(
   grid: number[][],
   rooms: Rect[],
   biome: Biome,
   quirkRand: () => number
 ): void {
-  // No quirks yet — every biome passes through untouched until PR B/C.
+  switch (biome) {
+    case "overgrown":
+      rootBreaches(grid, quirkRand);
+      break;
+    case "crypt":
+      burialNiches(grid, quirkRand);
+      break;
+    case "flesh":
+      organicBulges(grid, quirkRand);
+      break;
+    // stone: untouched baseline. frost/goldvault: no carve quirk (yet — PR C
+    // gives goldvault its treasury fill). ember: scorched chasms land in PR C.
+  }
+}
+
+// Root breaches (overgrown): a handful of short straight tunnels burst through
+// the rock between two nearby floor spaces, like roots forced a way. Loopier
+// floors: more escape routes, kite-friendly for the bat/spider band. (Walls
+// exactly 1 thick barely exist in these layouts — rooms never share walls — so
+// a breach is allowed to punch through up to BREACH_MAX_LEN tiles of rock.)
+const BREACH_MIN = 4;
+const BREACH_MAX = 8;
+const BREACH_MAX_LEN = 3; // a root can burst through rock up to this thick
+
+function rootBreaches(grid: number[][], rand: () => number): void {
+  const isFloor = (x: number, y: number) =>
+    x >= 0 && y >= 0 && x < MAP_W && y < MAP_H && grid[y][x] === 0;
+  const interior = (x: number, y: number) =>
+    x >= 1 && y >= 1 && x <= MAP_W - 2 && y <= MAP_H - 2;
+
+  // A candidate is a straight run of 1..BREACH_MAX_LEN interior wall tiles with
+  // floor at both ends. Scanning east + south from every floor tile finds each
+  // tunnel exactly once. Carving only ever opens floor → connectivity-safe.
+  const runs: { x: number; y: number }[][] = [];
+  for (let y = 1; y < MAP_H - 1; y++) {
+    for (let x = 1; x < MAP_W - 1; x++) {
+      if (grid[y][x] !== 0) continue; // tunnels start from floor
+      for (const { dx, dy } of [{ dx: 1, dy: 0 }, { dx: 0, dy: 1 }]) {
+        const cells: { x: number; y: number }[] = [];
+        let cx = x + dx, cy = y + dy;
+        while (cells.length < BREACH_MAX_LEN && interior(cx, cy) && grid[cy][cx] === 1) {
+          cells.push({ x: cx, y: cy });
+          cx += dx;
+          cy += dy;
+        }
+        if (cells.length > 0 && isFloor(cx, cy)) runs.push(cells);
+      }
+    }
+  }
+
+  const target = BREACH_MIN + Math.floor(rand() * (BREACH_MAX - BREACH_MIN + 1));
+  for (let i = 0; i < target && runs.length > 0; i++) {
+    const pick = Math.floor(rand() * runs.length);
+    // Earlier tunnels may have opened part of this one already — carving the
+    // remaining wall cells is still pure floor-opening, so it stays safe.
+    for (const c of runs.splice(pick, 1)[0]) grid[c.y][c.x] = 0;
+  }
+}
+
+// Burial niches (crypt): 1-tile alcoves carved into the walls of straight
+// corridors at intervals, alternating sides — ambush pockets and crate homes.
+// Especially at home in the catacombs preset, whose long corridors dominate.
+const NICHE_MIN_RUN = 5; // a corridor must run at least this straight to earn niches
+const NICHE_INTERVAL = 3; // tiles between alcoves along the run
+
+function burialNiches(grid: number[][], rand: () => number): void {
+  // An alcove is only carved as a true POCKET: a wall tile whose ONLY floor
+  // neighbor (in the live grid, so earlier alcoves count) is the corridor tile
+  // it opens onto. That's what keeps a niche from ever joining two floor
+  // spaces — breaching is overgrown's identity, not crypt's — including the
+  // corner case of alcoves from perpendicular runs landing side by side. The
+  // border stays untouched (interior-bounds check; the pocket floor keeps 3
+  // wall sides, so the nub-pruner leaves it alone).
+  const pocket = (x: number, y: number): boolean => {
+    if (x < 1 || y < 1 || x > MAP_W - 2 || y > MAP_H - 2) return false;
+    if (grid[y][x] !== 1) return false;
+    const floorSides =
+      (grid[y - 1][x] === 0 ? 1 : 0) +
+      (grid[y + 1][x] === 0 ? 1 : 0) +
+      (grid[y][x - 1] === 0 ? 1 : 0) +
+      (grid[y][x + 1] === 0 ? 1 : 0);
+    return floorSides === 1;
+  };
+
+  // One straight corridor run: floor tiles walled on both perpendicular sides.
+  // `sx/sy` step along the run; alcoves alternate between the two walls.
+  const carveRun = (
+    startX: number, startY: number, len: number,
+    sx: number, sy: number // unit step along the run (perp is (sy, sx))
+  ) => {
+    const phase = Math.floor(rand() * NICHE_INTERVAL); // vary where the first alcove sits
+    let side = rand() < 0.5 ? 1 : -1;
+    for (let i = phase; i < len; i += NICHE_INTERVAL) {
+      const cx = startX + sx * i, cy = startY + sy * i;
+      const dx = sy * side, dy = sx * side;
+      if (pocket(cx + dx, cy + dy)) {
+        grid[cy + dy][cx + dx] = 0;
+        side = -side;
+      }
+    }
+  };
+
+  // Horizontal runs…
+  for (let y = 1; y < MAP_H - 1; y++) {
+    let run = 0;
+    for (let x = 1; x < MAP_W; x++) {
+      const corridor =
+        x < MAP_W - 1 && grid[y][x] === 0 && grid[y - 1][x] === 1 && grid[y + 1][x] === 1;
+      if (corridor) run++;
+      else {
+        if (run >= NICHE_MIN_RUN) carveRun(x - run, y, run, 1, 0);
+        run = 0;
+      }
+    }
+  }
+  // …then vertical runs.
+  for (let x = 1; x < MAP_W - 1; x++) {
+    let run = 0;
+    for (let y = 1; y < MAP_H; y++) {
+      const corridor =
+        y < MAP_H - 1 && grid[y][x] === 0 && grid[y][x - 1] === 1 && grid[y][x + 1] === 1;
+      if (corridor) run++;
+      else {
+        if (run >= NICHE_MIN_RUN) carveRun(x, y - run, run, 0, 1);
+        run = 0;
+      }
+    }
+  }
+}
+
+// Organic bulges (flesh): every floor-adjacent wall gets a small chance to melt
+// open. Bulge-only erosion — walls only become floor — then the nub-pruner
+// smooths the mess. Rooms stop being rectangles; the warren reads as a
+// digestive tract. Pairs with the client's wall-eating blotch art.
+const BULGE_CHANCE = 0.14;
+
+function organicBulges(grid: number[][], rand: () => number): void {
+  // Candidates snapshot BEFORE melting so one pass can't cascade outward —
+  // and one rand() draw per candidate keeps the stream aligned regardless of
+  // which walls actually melt.
+  const candidates: { x: number; y: number }[] = [];
+  for (let y = 1; y < MAP_H - 1; y++) {
+    for (let x = 1; x < MAP_W - 1; x++) {
+      if (grid[y][x] !== 1) continue;
+      if (
+        grid[y - 1][x] === 0 || grid[y + 1][x] === 0 ||
+        grid[y][x - 1] === 0 || grid[y][x + 1] === 0
+      ) {
+        candidates.push({ x, y });
+      }
+    }
+  }
+  for (const c of candidates) {
+    if (rand() < BULGE_CHANCE) grid[c.y][c.x] = 0;
+  }
 }
 
 /**

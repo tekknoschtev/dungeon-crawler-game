@@ -129,9 +129,12 @@ new synced state.
   `(seed, biome)` with stone floors 1–4 regression-pinned to today's layouts,
   and quirks draw from a second RNG so lighting rolls never shift. Three
   PRs: plumbing+weights → floor-opening quirks → chasms+treasury.
-  **PR A (plumbing + weights) in review 2026-07-19**: biome resolved before
+  **PR A (plumbing + weights) merged 2026-07-19** (#41): biome resolved before
   carving, per-biome weight tables, catacombs/glacial/treasury presets,
-  quirk-RNG scaffold, stone regression pins.
+  quirk-RNG scaffold, stone regression pins. **PR B (floor-opening quirks) in
+  review 2026-07-19**: overgrown root breaches (short tunnels through ≤3 rock),
+  crypt burial niches (corridor pockets), flesh organic bulges (wall melt) —
+  all carve-only, connectivity-safe by construction.
 - **Special floors — trigger design.** Three special biome kits are SHIPPED
   as art + valid biome names (`frost`, `goldvault`, `flesh` — sheets, client
   textures, `DUNGEON_BIOME` override all work) but deliberately **not** in the
