@@ -62,6 +62,7 @@ const WALL_AUTOTILE: Record<number, number> = {
 const BIOME_TEXTURES: Record<string, string> = {
   overgrown: "tiles-overgrown",
   crypt: "tiles-crypt",
+  ember: "tiles-ember",
 };
 // Anti-tiling wall variants (extension row, fixed contract with
 // assets-src/biomes/build_biomes.py): alternate detail rolls of the brick
@@ -498,6 +499,10 @@ export class GameScene extends Phaser.Scene {
       frameHeight: TILE_SRC,
     });
     this.load.spritesheet(BIOME_TEXTURES.crypt, "/assets/tiny-dungeon/tilemap_crypt.png", {
+      frameWidth: TILE_SRC,
+      frameHeight: TILE_SRC,
+    });
+    this.load.spritesheet(BIOME_TEXTURES.ember, "/assets/tiny-dungeon/tilemap_ember.png", {
       frameWidth: TILE_SRC,
       frameHeight: TILE_SRC,
     });
