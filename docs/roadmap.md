@@ -120,6 +120,14 @@ new synced state.
 
 **Level Design**
 - **Massive levels** - Levels that feel so punishingly large that it's a challenge to get to the exit before the heat is full.  Maybe lots of corridors.  This probably will need some dials to make it fun and not just tedious.
+- **Special floors — trigger design.** Three special biome kits are SHIPPED
+  as art + valid biome names (`frost`, `goldvault`, `flesh` — sheets, client
+  textures, `DUNGEON_BIOME` override all work) but deliberately **not** in the
+  depth bands. Open design: how a party lands on one — rare roll on descend?
+  A visible "strange stairway" alternative exit? Depth-gated? Should
+  goldvault pair with loot/score modifiers (it begs to), frost with a
+  gameplay twist (slippery?), flesh with a mob-mix change? Decide, then it's
+  a small server change (a roll in `enterFloor` naming the biome).
 
 **Gameplay / loot**
 - **Permanent weapon changes** — a way to make an equipped weapon stick rather

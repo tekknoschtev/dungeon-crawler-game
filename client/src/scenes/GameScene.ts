@@ -63,6 +63,11 @@ const BIOME_TEXTURES: Record<string, string> = {
   overgrown: "tiles-overgrown",
   crypt: "tiles-crypt",
   ember: "tiles-ember",
+  // Special-floor kits — never dealt by the depth bands; reserved for future
+  // special/random floors (server names them like any other biome).
+  frost: "tiles-frost",
+  goldvault: "tiles-goldvault",
+  flesh: "tiles-flesh",
 };
 // Anti-tiling wall variants (extension row, fixed contract with
 // assets-src/biomes/build_biomes.py): alternate detail rolls of the brick
@@ -503,6 +508,18 @@ export class GameScene extends Phaser.Scene {
       frameHeight: TILE_SRC,
     });
     this.load.spritesheet(BIOME_TEXTURES.ember, "/assets/tiny-dungeon/tilemap_ember.png", {
+      frameWidth: TILE_SRC,
+      frameHeight: TILE_SRC,
+    });
+    this.load.spritesheet(BIOME_TEXTURES.frost, "/assets/tiny-dungeon/tilemap_frost.png", {
+      frameWidth: TILE_SRC,
+      frameHeight: TILE_SRC,
+    });
+    this.load.spritesheet(BIOME_TEXTURES.goldvault, "/assets/tiny-dungeon/tilemap_goldvault.png", {
+      frameWidth: TILE_SRC,
+      frameHeight: TILE_SRC,
+    });
+    this.load.spritesheet(BIOME_TEXTURES.flesh, "/assets/tiny-dungeon/tilemap_flesh.png", {
       frameWidth: TILE_SRC,
       frameHeight: TILE_SRC,
     });

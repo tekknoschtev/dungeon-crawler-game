@@ -54,10 +54,13 @@ const TORCHLIT_CHANCE = 0.22;
  * tile-sheet texture; bands whose art isn't built yet fall back to stone so
  * the band table can lead the kits. Sent in the "map" message.
  */
-export const BIOMES = ["stone", "overgrown", "crypt", "ember"] as const;
+// The first four are the depth bands; frost/goldvault/flesh are SPECIAL-floor
+// kits — shipped sheets + valid names (so the DUNGEON_BIOME override and any
+// future special-floor roll can summon them) but never returned by
+// biomeForDepth. Their trigger design is an open backlog item.
+export const BIOMES = ["stone", "overgrown", "crypt", "ember", "frost", "goldvault", "flesh"] as const;
 export type Biome = (typeof BIOMES)[number];
-// Kits that exist as shipped sheets (see docs/biome-art-plan.md). Grow this as
-// crypt/ember land — the band table below already routes to them.
+// Band kits that exist as shipped sheets (see docs/biome-art-plan.md).
 const BUILT_BIOMES: ReadonlySet<Biome> = new Set(["stone", "overgrown", "crypt", "ember"]);
 
 export function biomeForDepth(depth: number): Biome {
