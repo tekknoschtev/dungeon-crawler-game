@@ -9,6 +9,7 @@ import {
   rollMobKind,
   applyLootEffect,
   crateBombChance,
+  rollTreasure,
   applyKnockback,
   playerAttackDamage,
   mobDamageAfterDefense,
@@ -140,6 +141,22 @@ describe("rollMobKind (M5 depth-gated spawn mix)", () => {
       );
     expect(depthsHitCrab(2)).toBe(false);
     expect(depthsHitCrab(3)).toBe(true);
+  });
+});
+
+describe("treasure (goldvault special floors)", () => {
+  it("applyLootEffect treats treasure as pure score: consumed, nothing changes", () => {
+    const { t, b } = freshTarget();
+    const before = { ...t };
+    const kept = applyLootEffect(t, b, { rarity: "uncommon", category: "treasure", variant: "coin" });
+    expect(kept).toBe(true); // never left on the floor
+    expect(t).toEqual(before); // no heal charge, no buff, no weapon
+    expect(b).toEqual({ attackMult: 1, defenseReduce: 0, knockback: 0 });
+  });
+
+  it("rollTreasure deals coins mostly, the fat sack at the tail", () => {
+    expect(rollTreasure(() => 0.99)).toEqual({ variant: "coin", rarity: "uncommon" });
+    expect(rollTreasure(() => 0.0)).toEqual({ variant: "sack", rarity: "rare" });
   });
 });
 

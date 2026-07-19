@@ -40,6 +40,7 @@ import {
   BOMB_BLAST_DAMAGE,
   BOMB_KNOCKBACK,
   BOMB_STUN,
+  GOLDVAULT_TREASURE_COUNT,
 } from "./tuning";
 import {
   dist,
@@ -72,6 +73,7 @@ import {
   crateBombChance,
   chestPoints,
   rollRelic,
+  rollTreasure,
   type AggroCandidate,
   type Vec,
 } from "./logic";
@@ -421,6 +423,25 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     // any drop. Hidden-until-lit falls out of the dark-render path on the client.
     for (const s of this.map.secretLoot) {
       this.dropLoot(s.x * TILE + TILE / 2, s.y * TILE + TILE / 2);
+    }
+
+    // Goldvault special floors are strewn with treasure: pure-score pickups
+    // (no buff) that ride the normal loot machinery — rarity scores them at
+    // the live multiplier on pickup, and they tally into M13's haul. Dormant
+    // until special-floor triggers exist (goldvault isn't in the depth bands).
+    if (this.map.biome === "goldvault") {
+      for (let n = 0; n < GOLDVAULT_TREASURE_COUNT; n++) {
+        const tile = this.floors[Math.floor(Math.random() * this.floors.length)];
+        if (!tile) break;
+        const t = rollTreasure();
+        const loot = new Loot();
+        loot.x = tile.x * TILE + TILE / 2;
+        loot.y = tile.y * TILE + TILE / 2;
+        loot.category = "treasure";
+        loot.rarity = t.rarity;
+        loot.variant = t.variant;
+        this.state.loot.set(`l${this.lootSeq++}`, loot);
+      }
     }
 
     // Seed the calm starting population so the floor isn't empty on arrival.
