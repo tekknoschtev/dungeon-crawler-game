@@ -5,9 +5,10 @@
  *
  * Geometry is produced by a small SEEDED room-and-corridor generator: we place
  * a handful of non-overlapping rectangular rooms and join them with L-shaped
- * corridors. Because everything is driven by one numeric seed (stored in
- * DungeonState and generated here on room create), every client in a room gets
- * the exact same dungeon, and we can reproduce any layout later.
+ * corridors. Because everything is driven by the numeric seed (stored in
+ * DungeonState and generated here on room create) plus the depth biome — itself
+ * a pure function of depth — every client in a room gets the exact same
+ * dungeon, and we can reproduce any layout later.
  */
 export const TILE = 16; // pixel size of one tile (native art size; the client zooms)
 export const MAP_W = 60; // tiles (fixed — all presets share the same grid)
@@ -48,11 +49,16 @@ const DARK_CHANCE = 0.34;
 const TORCHLIT_CHANCE = 0.22;
 
 /**
- * Depth biome (M15) — a COSMETIC axis (unlike lighting): every ~5 floors the
- * dungeon becomes a different place. Pure function of depth (no RNG draw, so
- * adding biomes never perturbs seeded layouts). The client maps the name to a
+ * Depth biome (M15): every ~5 floors the dungeon becomes a different place.
+ * Pure function of depth (no RNG draw). The client maps the name to a
  * tile-sheet texture; bands whose art isn't built yet fall back to stone so
  * the band table can lead the kits. Sent in the "map" message.
+ *
+ * Since the floorplans milestone (docs/biome-floorplans-plan.md) the biome is
+ * also a GENERATION input, not just cosmetics: it weights the archetype roll
+ * (see BIOME_PRESET_WEIGHTS) and salts the quirk RNG, so geometry is a pure
+ * function of (seed, biome). Stone is the untouched baseline — floors 1-4 keep
+ * the legacy seed-only layouts bit-for-bit (regression-pinned in map.test.ts).
  */
 // The first four are the depth bands; frost/goldvault/flesh are SPECIAL-floor
 // kits — shipped sheets + valid names (so the DUNGEON_BIOME override and any
@@ -78,6 +84,53 @@ const PRESETS: readonly FloorPreset[] = [
   // A handful of big open rooms. Wide-open fights, few props, easier to navigate.
   { name: "hall",   roomMin: 7, roomMax: 15, roomAttempts: 80,  maxRooms: 7,  propChance: 0.02 },
 ];
+const [WARREN, STANDARD, HALL] = PRESETS;
+
+// Biome-only presets (floorplans milestone) — never rolled on stone floors.
+// Tiny rooms, few of them, so the long L-corridors between them dominate — an
+// ossuary of passages. PR B's burial-niche quirk decorates those corridors.
+const CATACOMBS: FloorPreset =
+  { name: "catacombs", roomMin: 4, roomMax: 6, roomAttempts: 140, maxRooms: 8, propChance: 0.08 };
+// Frost's hall variant: glacial chambers — hall but bigger still, so the ice
+// reads as wide-open sheets (and the art's ice slicks get room to scatter).
+const GLACIAL: FloorPreset =
+  { name: "glacial", roomMin: 9, roomMax: 17, roomAttempts: 80, maxRooms: 6, propChance: 0.02 };
+// Goldvault's hall variant: hall geometry with propChance cranked — a treasury
+// is FULL of crates to smash (feeds the key hunt + treasure mood). PR C layers
+// the real interior fill + symmetry stretch on top.
+const TREASURY: FloorPreset =
+  { name: "treasury", roomMin: 7, roomMax: 15, roomAttempts: 80, maxRooms: 7, propChance: 0.30 };
+
+/**
+ * Per-biome archetype weights (floorplans milestone): each biome keeps drawing
+ * exactly ONE number from the main RNG for its archetype, but maps that draw
+ * through its own weight table, so each biome is SHAPED differently, not just
+ * skinned. Stone deliberately bypasses this table — it keeps the legacy uniform
+ * `PRESETS[floor(roll * 3)]` mapping bit-for-bit so pre-floorplans layouts
+ * survive seed-for-seed (its entry here is documentation only).
+ */
+const BIOME_PRESET_WEIGHTS: Record<Biome, readonly (readonly [FloorPreset, number])[]> = {
+  stone:     [[WARREN, 1], [STANDARD, 1], [HALL, 1]],
+  overgrown: [[WARREN, 45], [STANDARD, 35], [HALL, 20]], // root-tangle warrens
+  crypt:     [[WARREN, 10], [STANDARD, 25], [HALL, 15], [CATACOMBS, 50]],
+  ember:     [[WARREN, 15], [STANDARD, 35], [HALL, 50]], // scorched-open halls
+  frost:     [[WARREN, 10], [STANDARD, 25], [GLACIAL, 65]],
+  goldvault: [[STANDARD, 20], [TREASURY, 80]], // never a warren — vaults are grand
+  flesh:     [[WARREN, 70], [STANDARD, 20], [HALL, 10]], // a digestive tract
+};
+
+/** Map the single archetype roll to a preset through the biome's weight table. */
+function pickPreset(biome: Biome, roll: number): FloorPreset {
+  if (biome === "stone") return PRESETS[Math.floor(roll * PRESETS.length)]; // legacy mapping, untouched
+  const weights = BIOME_PRESET_WEIGHTS[biome];
+  const total = weights.reduce((sum, [, w]) => sum + w, 0);
+  let r = roll * total;
+  for (const [preset, w] of weights) {
+    r -= w;
+    if (r < 0) return preset;
+  }
+  return weights[weights.length - 1][0]; // roll ≈ 1.0 edge
+}
 
 /**
  * mulberry32 — a tiny, fast, seedable PRNG. Deterministic for a given seed and
@@ -144,6 +197,40 @@ function pruneWallNubs(grid: number[][]): void {
       }
     }
   }
+}
+
+/** FNV-1a hash of a string — salts the quirk RNG stream per biome. */
+function hashString(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/**
+ * Biome quirk hook (floorplans milestone). Runs AFTER room/corridor carving and
+ * BEFORE nub-pruning + vault/exit/spawn/prop placement, so the pruner smooths
+ * whatever a quirk does and everything downstream (sealed vault, reachability
+ * flood-fill, prop spawns) just works on the quirked grid. Quirks draw ONLY
+ * from the quirk RNG — `mulberry32(seed ^ hashString(biome))`, a second stream —
+ * never the main one, so a quirk can never shift room placement, corridor
+ * flips, or the lighting roll of a given seed.
+ *
+ * PR A ships the scaffold only; the quirks land next (docs/biome-floorplans-plan.md):
+ *  - PR B (floor-opening, connectivity-safe by construction): overgrown root
+ *    breaches, crypt burial niches, flesh organic bulges.
+ *  - PR C (adds walls, needs containment tests): ember scorched chasms, plus
+ *    the goldvault treasury fill.
+ */
+function applyBiomeQuirks(
+  grid: number[][],
+  rooms: Rect[],
+  biome: Biome,
+  quirkRand: () => number
+): void {
+  // No quirks yet — every biome passes through untouched until PR B/C.
 }
 
 /**
@@ -538,9 +625,12 @@ function carveVault(
 }
 
 /**
- * Build a dungeon from a seed. The same seed always yields the same layout.
- * `depth` only gates the lighting roll (floor 1 is never dark — see below); it
- * does not affect geometry, so the same seed yields the same layout at any depth.
+ * Build a dungeon from a seed. Geometry is a pure function of (seed, biome):
+ * the same seed within the same biome band always yields the identical layout,
+ * so every co-op client and every re-run agrees. Biome is itself a pure band
+ * lookup on depth (see biomeForDepth), and stone — floors 1-4 — keeps the
+ * legacy seed-only layouts bit-for-bit. Beyond geometry, `depth` only gates
+ * the lighting roll (floor 1 is never dark — see below).
  */
 export function loadMap(
   seed: number,
@@ -552,8 +642,18 @@ export function loadMap(
   const randInt = (min: number, max: number) =>
     min + Math.floor(rand() * (max - min + 1));
 
-  // Pick a floor archetype first — uses one RNG draw so it's part of the seed.
-  const preset = PRESETS[Math.floor(rand() * PRESETS.length)];
+  // Resolve the biome FIRST (pure band lookup, no RNG draw): since the
+  // floorplans milestone it shapes generation — it weights the archetype roll
+  // and salts the quirk stream below.
+  const biome = forcedBiome ?? biomeForDepth(depth);
+  // Second RNG stream for biome quirks, so quirks never consume (or shift) the
+  // main stream's draws — which seeds roll dark/torchlit stays quirk-proof.
+  const quirkRand = mulberry32((seed ^ hashString(biome)) >>> 0);
+
+  // Pick a floor archetype first — exactly one main-RNG draw for EVERY biome
+  // (so the streams stay aligned); the biome only changes how that draw maps
+  // to a preset. Stone keeps the legacy uniform mapping.
+  const preset = pickPreset(biome, rand());
 
   // Start solid; we carve floors out of the rock.
   const grid: number[][] = Array.from({ length: MAP_H }, () =>
@@ -605,7 +705,12 @@ export function loadMap(
     rooms.push(candidate);
   }
 
-  // Clean up thin wall fragments the carving leaves behind.
+  // Biome quirks reshape the freshly-carved grid (root breaches, niches, …) —
+  // a no-op scaffold until PR B/C. Runs before pruning so the pruner tidies up
+  // after them, and before all placement so downstream code sees the final grid.
+  applyBiomeQuirks(grid, rooms, biome, quirkRand);
+
+  // Clean up thin wall fragments the carving (or a quirk) leaves behind.
   pruneWallNubs(grid);
 
   // Carve the sealed vault chamber AFTER pruning: prune opens walls with 3+ floor
@@ -679,10 +784,6 @@ export function loadMap(
     props.push(...secrets.crates);
     secretLoot = secrets.loot;
   }
-
-  // Depth biome (M15): pure band lookup — deliberately NOT an RNG draw, so
-  // biome changes can never shift a seed's layout or lighting roll.
-  const biome = forcedBiome ?? biomeForDepth(depth);
 
   return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props, exit, vault, preset: preset.name, lighting, biome, torches, secretLoot };
 }

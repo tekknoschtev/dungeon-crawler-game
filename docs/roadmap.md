@@ -121,11 +121,17 @@ new synced state.
 **Level Design**
 - **Massive levels** - Levels that feel so punishingly large that it's a challenge to get to the exit before the heat is full.  Maybe lots of corridors.  This probably will need some dials to make it fun and not just tedious.
 - **Biome floorplans** — vary the *generator* by biome, not just the art
-  (owner: "that's what will really sell it"). Cheap first step: per-biome
-  weights over the existing PRESETS (flesh favors warren's organic tunnels,
-  goldvault favors hall's big chambers, frost mixes wide rooms). Deeper cut:
-  biome-specific carve quirks (irregular flesh walls, vault-like symmetric
-  rooms). Next-PR candidate — pairs naturally with special-floor triggers.
+  (owner: "that's what will really sell it"). **Planned 2026-07-19** — full
+  design in [`biome-floorplans-plan.md`](biome-floorplans-plan.md): per-biome
+  preset weights (+ a new *catacombs* preset), one signature carve quirk per
+  biome (root breaches / burial niches / scorched chasms / organic bulges /
+  glacial halls / crate-rich treasury), geometry becomes pure in
+  `(seed, biome)` with stone floors 1–4 regression-pinned to today's layouts,
+  and quirks draw from a second RNG so lighting rolls never shift. Three
+  PRs: plumbing+weights → floor-opening quirks → chasms+treasury.
+  **PR A (plumbing + weights) in review 2026-07-19**: biome resolved before
+  carving, per-biome weight tables, catacombs/glacial/treasury presets,
+  quirk-RNG scaffold, stone regression pins.
 - **Special floors — trigger design.** Three special biome kits are SHIPPED
   as art + valid biome names (`frost`, `goldvault`, `flesh` — sheets, client
   textures, `DUNGEON_BIOME` override all work) but deliberately **not** in the
