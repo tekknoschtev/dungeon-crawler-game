@@ -16,6 +16,7 @@ import {
   CRATE_BOMB_CHANCE_BASE,
   CRATE_BOMB_CHANCE_DEPTH,
   CRATE_BOMB_CHANCE_MAX,
+  TREASURE_SACK_CHANCE,
   PASSIVE_REGEN,
   RARITIES,
   RARITY_TOTAL,
@@ -175,6 +176,11 @@ export interface LootDrop {
  * never shortens your remaining buff time.
  */
 export function applyLootEffect(target: LootTarget, buffs: LootBuffs, loot: LootDrop): boolean {
+  if (loot.category === "treasure") {
+    // Pure score: no buff, no stack — the pickup path scores it by rarity
+    // (like all loot) and that's the whole effect. Always consumed.
+    return true;
+  }
   if (loot.category === "attack") {
     const w = weaponByName(loot.variant ?? "");
     // The displayed weapon is whichever one owns the active (strongest) power, so
@@ -202,6 +208,20 @@ export function applyLootEffect(target: LootTarget, buffs: LootBuffs, loot: Loot
   if (target.healCharges >= MAX_HEAL_CHARGES) return false;
   target.healCharges++;
   return true;
+}
+
+/**
+ * Roll one goldvault treasure drop (special floors): mostly coins
+ * (uncommon-value score), sometimes the fat sack (rare-value). Pure for
+ * testing; rarity feeds the normal loot-score path on pickup.
+ */
+export function rollTreasure(
+  rng: Rng = Math.random,
+  sackChance: number = TREASURE_SACK_CHANCE
+): { variant: string; rarity: string } {
+  return rng() < sackChance
+    ? { variant: "sack", rarity: "rare" }
+    : { variant: "coin", rarity: "uncommon" };
 }
 
 /**

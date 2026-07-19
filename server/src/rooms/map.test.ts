@@ -44,6 +44,15 @@ describe("biomeForDepth (M15)", () => {
     expect(biomeForDepth(99)).toBe("ember");
   });
 
+  it("never deals a special biome from the depth bands", () => {
+    // frost/goldvault/flesh are special-floor kits (trigger design TBD) —
+    // normal band generation must never produce them.
+    const bands = new Set(["stone", "overgrown", "crypt", "ember"]);
+    for (let depth = 1; depth <= 40; depth++) {
+      expect(bands.has(biomeForDepth(depth))).toBe(true);
+    }
+  });
+
   it("never perturbs geometry: same seed, same layout at any biome depth", () => {
     // Biome is a pure band lookup, not an RNG draw — depth already never
     // affects geometry, and adding the biome must keep it that way.

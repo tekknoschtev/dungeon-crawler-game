@@ -13,6 +13,9 @@ const TILES_KEY = "tiles";
 // of a smashed key crate. Same 16x16 grid but 12 columns; key is frame #117.
 const TOWN_KEY = "town";
 const FRAME_KEY = 117;
+// Goldvault treasure pickups (special floors) — Tiny Town coin + coin sack.
+const FRAME_COIN = 93;
+const FRAME_SACK = 106;
 const TILE_SRC = 16; // source tile size in px (we scale up to the world TILE)
 const FRAME_FLOOR = 48; // plain stone floor (the common case)
 const FRAME_FLOOR_SPECKLE = 49; // subtle pebble/sand debris — same tan base as #48
@@ -63,6 +66,11 @@ const BIOME_TEXTURES: Record<string, string> = {
   overgrown: "tiles-overgrown",
   crypt: "tiles-crypt",
   ember: "tiles-ember",
+  // Special-floor kits — never dealt by the depth bands; reserved for future
+  // special/random floors (server names them like any other biome).
+  frost: "tiles-frost",
+  goldvault: "tiles-goldvault",
+  flesh: "tiles-flesh",
 };
 // Anti-tiling wall variants (extension row, fixed contract with
 // assets-src/biomes/build_biomes.py): alternate detail rolls of the brick
@@ -117,6 +125,12 @@ const TORCH_SPRITE_DEPTH = 2; // the torch sits above the wall it's mounted on
 // tint subtly toward their player color (you read teammates by their glow); a downed
 // hero's distress beacon tints danger-red.
 const TORCH_TINT_COLOR = 0xffb060; // warm amber
+// Some biomes burn differently: frost torches throw a cold blue-white pool
+// (the frost sheet also recolors the torch sprite's flame — see extra_frames
+// in assets-src/biomes/build_biomes.py). Default is the warm amber above.
+const TORCH_TINTS: Record<string, number> = {
+  frost: 0xbfe4ff,
+};
 const TORCH_TINT_MAX = 0.55;
 // A hero's own light stays neutral (your view is true-color); teammates' light picks
 // up a *subtle* hint of their player color so you can tell whose bubble is whose.
@@ -430,6 +444,8 @@ export class GameScene extends Phaser.Scene {
   // Texture key map geometry draws from — the current floor's biome sheet
   // (M15); TILES_KEY (stone) until a "map" message says otherwise.
   private mapTilesKey: string = TILES_KEY;
+  // Flesh floors only: the slow-pulsing red wash that makes the floor breathe.
+  private fleshPulse?: Phaser.GameObjects.Rectangle;
   // The codex fold-in for the run that just ended (M14): prev snapshot (drives
   // the NEW badges) + which personal bests broke. Set once per run end — it
   // doubles as the "already recorded" guard — and cleared with runTallies.
@@ -503,6 +519,18 @@ export class GameScene extends Phaser.Scene {
       frameHeight: TILE_SRC,
     });
     this.load.spritesheet(BIOME_TEXTURES.ember, "/assets/tiny-dungeon/tilemap_ember.png", {
+      frameWidth: TILE_SRC,
+      frameHeight: TILE_SRC,
+    });
+    this.load.spritesheet(BIOME_TEXTURES.frost, "/assets/tiny-dungeon/tilemap_frost.png", {
+      frameWidth: TILE_SRC,
+      frameHeight: TILE_SRC,
+    });
+    this.load.spritesheet(BIOME_TEXTURES.goldvault, "/assets/tiny-dungeon/tilemap_goldvault.png", {
+      frameWidth: TILE_SRC,
+      frameHeight: TILE_SRC,
+    });
+    this.load.spritesheet(BIOME_TEXTURES.flesh, "/assets/tiny-dungeon/tilemap_flesh.png", {
       frameWidth: TILE_SRC,
       frameHeight: TILE_SRC,
     });
@@ -897,6 +925,8 @@ export class GameScene extends Phaser.Scene {
    *  attack, the shield for defense, else the potion. */
   private lootSprite(l: LootView): { texture: string; frame: number } {
     if (l.category === "bomb") return { texture: TOWN_KEY, frame: FRAME_BOMB };
+    if (l.category === "treasure")
+      return { texture: TOWN_KEY, frame: l.variant === "sack" ? FRAME_SACK : FRAME_COIN };
     if (l.category === "attack")
       return { texture: TILES_KEY, frame: WEAPON_FRAMES[l.variant] ?? CATEGORY_FRAME.attack };
     return { texture: TILES_KEY, frame: CATEGORY_FRAME[l.category] ?? CATEGORY_FRAME.heal };
@@ -1987,6 +2017,27 @@ export class GameScene extends Phaser.Scene {
         .setDepth(BACKDROP_DEPTH);
     }
 
+    // Flesh floors breathe: a world-covering red wash whose alpha pulses on a
+    // slow sine, so the whole place seems faintly alive. One rectangle + one
+    // tween — no per-tile cost. Sits above geometry/decor, below loot/heroes.
+    this.fleshPulse?.destroy();
+    this.fleshPulse = undefined;
+    if (data.biome === "flesh") {
+      this.fleshPulse = this.add
+        .rectangle(0, 0, worldW, worldH, 0x9c1f2e)
+        .setOrigin(0)
+        .setDepth(DECOR_DEPTH + 1)
+        .setAlpha(0.02);
+      this.tweens.add({
+        targets: this.fleshPulse,
+        alpha: 0.08,
+        duration: 2400,
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.inOut",
+      });
+    }
+
     const grid = data.grid;
     const isWall = (gx: number, gy: number) =>
       gx < 0 || gy < 0 || gx >= data.width || gy >= data.height || grid[gy][gx] === 1;
@@ -2013,7 +2064,19 @@ export class GameScene extends Phaser.Scene {
           const cell = this.addCell(x * t, y * t, t, floorFrame);
           // The speckle tile is non-directional debris, so mirror/rotate it for
           // extra variety — turns one frame into 8 orientations with no seams.
-          if (floorFrame === FRAME_FLOOR_SPECKLE) this.orientDecor(cell, x, y, t);
+          if (floorFrame === FRAME_FLOOR_SPECKLE) {
+            this.orientDecor(cell, x, y, t);
+          } else if (
+            this.mapTilesKey !== TILES_KEY &&
+            (floorFrame === FRAME_FLOOR || floorFrame === FRAME_FLOOR_PAVED)
+          ) {
+            // Biome floors carry baked features (sparkles/coins/tufts) at fixed
+            // in-tile positions — rotate/flip per position like the speckle so
+            // the features don't line up into a repeat grid. Shadow tiles stay
+            // fixed (their gradient is directional); stone's plain tan gains
+            // nothing from rotating, so the base sheet keeps its exact look.
+            this.orientDecor(cell, x, y, t);
+          }
           this.trackDarkCell(cell, x, y, t);
           continue;
         }
@@ -2061,6 +2124,9 @@ export class GameScene extends Phaser.Scene {
     // sprites aren't tracked as darkCells, so they never dim. Rebuilt per floor.
     this.clearTorches();
     this.torchLights = [];
+    // Per-biome torch light: frost torches burn cold (blue-white pool + the
+    // frost sheet's icy flame sprite); everywhere else stays warm amber.
+    const torchTint = TORCH_TINTS[data.biome ?? ""] ?? TORCH_TINT_COLOR;
     for (const tr of data.torches ?? []) {
       const wx = tr.x * t + t / 2;
       const wy = tr.y * t + t / 2;
@@ -2071,7 +2137,7 @@ export class GameScene extends Phaser.Scene {
         y: ly,
         inner: TORCH_LIGHT_INNER,
         outer: TORCH_LIGHT_OUTER,
-        tint: TORCH_TINT_COLOR,
+        tint: torchTint,
         strength: TORCH_TINT_MAX,
       });
       this.buildTorch(wx, wy);
@@ -2342,7 +2408,8 @@ export class GameScene extends Phaser.Scene {
    * tracked as a darkCell, so it stays lit. Registered for per-floor teardown.
    */
   private buildTorch(wx: number, wy: number) {
-    const sprite = this.add.image(wx, wy, TILES_KEY, FRAME_TORCH).setDepth(TORCH_SPRITE_DEPTH);
+    // The biome sheet, not the base one: frost's clone recolors the flame icy.
+    const sprite = this.add.image(wx, wy, this.mapTilesKey, FRAME_TORCH).setDepth(TORCH_SPRITE_DEPTH);
     const flicker = this.tweens.add({
       targets: sprite,
       alpha: 0.78,

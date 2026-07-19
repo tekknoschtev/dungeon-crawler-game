@@ -211,6 +211,15 @@ export const BOMB_KNOCKBACK = 48; // px a mob in the blast is shoved outward fro
 export const BOMB_STUN = 2.5; // s every mob on the map is frozen on detonation
 export const BOMB_FRAME = 105; // Tiny Town sheet index the client renders (bomb tile)
 
+// --- Special floors ------------------------------------------------------
+// Goldvault floors are strewn with pure-score treasure pickups ("treasure"
+// loot category: no buff, just points at the floor's live multiplier —
+// coins are uncommon-value, sacks rare-value; see rollTreasure). Dormant
+// until special-floor triggers exist (the biome isn't in the depth bands),
+// but fully live under the DUNGEON_BIOME override.
+export const GOLDVAULT_TREASURE_COUNT = 12; // drops scattered per goldvault floor
+export const TREASURE_SACK_CHANCE = 0.2; // share of drops that are the fat sack
+
 // --- Vault chest (M4) --------------------------------------------------
 // One vault per floor: visible from arrival, sealed behind a timed door that
 // opens once the floor's heat is already spicy. Cracking it open under fire pays
