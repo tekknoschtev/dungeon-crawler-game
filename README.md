@@ -53,6 +53,32 @@ Controls: **WASD** or **arrow keys** to move. Your hero has a yellow ring.
 > Prefer two terminals? Run `npm run dev:server` in one and
 > `npm run dev:client` in another.
 
+### Dev overrides (for testing)
+
+The server reads a few env vars that **force** normally-random or depth-gated
+choices, so you can jump straight to the thing you want to see. All are unset in
+prod; an invalid value is ignored and the game behaves normally.
+
+| Variable | Forces | Values |
+|---|---|---|
+| `DUNGEON_BIOME` | The biome tile kit on every floor (incl. the special kits that aren't in the depth bands) | `stone` `overgrown` `crypt` `ember` `frost` `goldvault` `flesh` |
+| `DUNGEON_LIGHTING` | The lighting mode on every floor (overrides "floor 1 is always bright") | `bright` `dark` `torchlit` |
+| `DUNGEON_SEED` | The base seed → **the whole run is reproducible** floor-for-floor; restart replays the identical run | any integer |
+| `PORT` | The server port | default `2567` |
+
+```bash
+# Git Bash — one-shot (only this run)
+DUNGEON_BIOME=goldvault DUNGEON_SEED=12345 npm run dev
+```
+```powershell
+# PowerShell — persists for the terminal; clear with `Remove-Item Env:DUNGEON_BIOME`
+$env:DUNGEON_BIOME='ember'; npm run dev
+```
+
+The server logs a line per floor — `Floor 1 — preset: hall, lighting: bright,
+biome: ember (seed 627383556)` — so you can confirm an override took effect (a
+typo'd value silently falls back to normal).
+
 ---
 
 ## What's in here
