@@ -229,9 +229,10 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.state.code = code;
     this.setMetadata({ code });
 
-    // One random base seed per room; each floor's layout derives from it + depth
-    // (see enterFloor), so the dungeon is reproducible and (later) shareable by code.
-    this.baseSeed = (Math.random() * 0x100000000) >>> 0;
+    // One base seed per room; each floor's layout derives from it + depth (see
+    // enterFloor), so the dungeon is reproducible and (later) shareable by code.
+    // Random unless a DUNGEON_SEED dev override pins it (see rollBaseSeed).
+    this.baseSeed = this.rollBaseSeed();
     this.enterFloor(1);
 
     // Receive movement intent from a client. We sanitize to plain booleans so a
@@ -324,6 +325,29 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   }
 
   // --- Floors ------------------------------------------------------------
+
+  /**
+   * The room's base seed — every floor's layout derives from it + depth (see
+   * enterFloor). Normally random per room (and per restart), so each run is a
+   * fresh dungeon. Dev/testing override: DUNGEON_SEED=<number> pins it, making
+   * the WHOLE run reproducible floor-for-floor — and, because restart re-rolls
+   * through here too, restarting under the override replays the identical run.
+   * An invalid value is ignored (warned) so a typo falls back to random rather
+   * than silently freezing every run to seed 0. Unset in prod.
+   */
+  private rollBaseSeed(): number {
+    const raw = process.env.DUNGEON_SEED;
+    if (raw !== undefined && raw !== "") {
+      const n = Number(raw);
+      if (Number.isFinite(n)) {
+        const seed = n >>> 0; // coerce to the uint32 the generator expects
+        console.log(`DUNGEON_SEED override active — base seed ${seed} (run is reproducible)`);
+        return seed;
+      }
+      console.warn(`Ignoring invalid DUNGEON_SEED="${raw}" (not a number); using a random seed.`);
+    }
+    return (Math.random() * 0x100000000) >>> 0;
+  }
 
   /**
    * (Re)generate and enter floor `depth`. Used for the initial floor and every
@@ -951,7 +975,9 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   private handleRestart() {
     if (this.state.phase !== "gameover") return;
     // New layout for the new run (each floor still derives from this + depth).
-    this.baseSeed = (Math.random() * 0x100000000) >>> 0;
+    // Under a DUNGEON_SEED override this re-pins the same seed, so a restart
+    // deliberately replays the identical run (reproducible testing).
+    this.baseSeed = this.rollBaseSeed();
     this.state.players.forEach((player, sessionId) => {
       player.hp = player.maxHp;
       player.downed = false;
