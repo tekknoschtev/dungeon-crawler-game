@@ -120,21 +120,22 @@ new synced state.
 
 **Level Design**
 - **Massive levels** - Levels that feel so punishingly large that it's a challenge to get to the exit before the heat is full.  Maybe lots of corridors.  This probably will need some dials to make it fun and not just tedious.
-- **Biome floorplans** — vary the *generator* by biome, not just the art
-  (owner: "that's what will really sell it"). **Planned 2026-07-19** — full
-  design in [`biome-floorplans-plan.md`](biome-floorplans-plan.md): per-biome
-  preset weights (+ a new *catacombs* preset), one signature carve quirk per
-  biome (root breaches / burial niches / scorched chasms / organic bulges /
-  glacial halls / crate-rich treasury), geometry becomes pure in
-  `(seed, biome)` with stone floors 1–4 regression-pinned to today's layouts,
-  and quirks draw from a second RNG so lighting rolls never shift. Three
-  PRs: plumbing+weights → floor-opening quirks → chasms+treasury.
-  **PR A (plumbing + weights) merged 2026-07-19** (#41): biome resolved before
-  carving, per-biome weight tables, catacombs/glacial/treasury presets,
-  quirk-RNG scaffold, stone regression pins. **PR B (floor-opening quirks) in
-  review 2026-07-19**: overgrown root breaches (short tunnels through ≤3 rock),
-  crypt burial niches (corridor pockets), flesh organic bulges (wall melt) —
-  all carve-only, connectivity-safe by construction.
+- **Biome floorplans — SHIPPED 2026-07-19.** Vary the *generator* by biome,
+  not just the art (owner: "that's what will really sell it"). Design in
+  [`biome-floorplans-plan.md`](biome-floorplans-plan.md): per-biome preset
+  weights (+ a new *catacombs* preset), one signature carve quirk per biome,
+  geometry pure in `(seed, biome)` with stone floors 1–4 regression-pinned,
+  quirks on a second RNG so lighting rolls never shift. Landed as three PRs:
+  **A** plumbing+weights (#41) — biome resolved before carving, weight tables,
+  catacombs/glacial/treasury presets, quirk-RNG scaffold, stone pins;
+  **B** floor-opening quirks (#42) — overgrown root breaches (tunnels through
+  ≤3 rock), crypt burial niches (corridor pockets), flesh organic bulges (wall
+  melt), all carve-only/connectivity-safe; **C** chasms+treasury — ember
+  scorched chasms (the one wall-adding quirk, ≥2-wide blobs behind a ≥2 floor
+  ring, off every load-bearing tile) and the goldvault treasury fill (interior
+  breakable-crate heaps — ~100 crates a floor). *Deferred stretch (own call,
+  not shipped):* mirrored-symmetric goldvault layouts — the crate hoard already
+  reads as a treasury, so the symmetry wasn't worth its risk yet.
 - **Special floors — trigger design.** Three special biome kits are SHIPPED
   as art + valid biome names (`frost`, `goldvault`, `flesh` — sheets, client
   textures, `DUNGEON_BIOME` override all work) but deliberately **not** in the
