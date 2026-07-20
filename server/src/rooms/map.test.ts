@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { loadMap, MAP_W, MAP_H, TILE, LIGHTING, BIOMES, biomeForDepth } from "./map";
+import { loadMap, applyBiomeQuirks, MAP_W, MAP_H, TILE, LIGHTING, BIOMES, biomeForDepth } from "./map";
 
 /** Flood-fill the floor (0) cells reachable from a start tile; returns the count. */
 function reachableFloorCount(grid: number[][], startX: number, startY: number): number {
@@ -270,22 +270,24 @@ describe("biome floorplans (PR A: weights + plumbing)", () => {
     }
   });
 
-  it("changes shape ONLY via the weight table: same archetype as stone ⇒ stone's exact grid", () => {
-    // PR A ships no quirks (the quirk hook is a no-op and draws from a second
-    // RNG stream), so when a biome's weighted pick lands on the same archetype
-    // stone would roll, every subsequent main-stream draw lines up and the grid
-    // must be identical. PR B's quirks will deliberately break this for their
-    // biomes — this pin gets replaced by per-quirk tests then.
-    let matched = 0;
-    for (let s = 0; s < 40; s++) {
-      const stone = loadMap(s, 2, "bright");
-      const flesh = loadMap(s, 2, "bright", "flesh");
-      if (flesh.preset === stone.preset) {
-        matched++;
-        expect(flesh.grid).toEqual(stone.grid);
+  it("quirkless biomes change shape ONLY via the weight table: same archetype as stone ⇒ stone's exact grid", () => {
+    // When a biome's weighted pick lands on the same archetype stone would
+    // roll, every subsequent main-stream draw lines up — so a biome with no
+    // carve quirk must yield stone's exact grid. Holds for ember until PR C's
+    // chasms (replace this pin with the chasm containment tests then), and for
+    // frost permanently (its glacial preset IS its quirk).
+    for (const biome of ["ember", "frost"] as const) {
+      let matched = 0;
+      for (let s = 0; s < 40; s++) {
+        const stone = loadMap(s, 2, "bright");
+        const other = loadMap(s, 2, "bright", biome);
+        if (other.preset === stone.preset) {
+          matched++;
+          expect(other.grid).toEqual(stone.grid);
+        }
       }
+      expect(matched).toBeGreaterThan(0);
     }
-    expect(matched).toBeGreaterThan(0);
   });
 
   it("weights the archetype roll per biome (deterministic over a fixed seed sweep)", () => {
@@ -394,6 +396,184 @@ describe("biome floorplans (PR A: weights + plumbing)", () => {
             expect(fn).toBeLessThan(3);
           }
         }
+      }
+    }
+  });
+});
+
+describe("biome quirks (PR B: floor-opening carves)", () => {
+  // Same tiny PRNG the generator uses, reimplemented here so the direct quirk
+  // contract tests below get a deterministic stream without exporting internals.
+  const prng = (seed: number) => {
+    let a = seed >>> 0;
+    return () => {
+      a |= 0;
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  const clone = (g: number[][]) => g.map((r) => r.slice());
+  /** Diff two grids → list of changed cells with before/after values. */
+  const diff = (before: number[][], after: number[][]) => {
+    const changes: { x: number; y: number; from: number; to: number }[] = [];
+    for (let y = 0; y < MAP_H; y++) {
+      for (let x = 0; x < MAP_W; x++) {
+        if (before[y][x] !== after[y][x]) {
+          changes.push({ x, y, from: before[y][x], to: after[y][x] });
+        }
+      }
+    }
+    return changes;
+  };
+  const floorNeighbors = (g: number[][], x: number, y: number) =>
+    (g[y - 1]?.[x] === 0 ? 1 : 0) +
+    (g[y + 1]?.[x] === 0 ? 1 : 0) +
+    (g[y]?.[x - 1] === 0 ? 1 : 0) +
+    (g[y]?.[x + 1] === 0 ? 1 : 0);
+  // A realistic pre-quirk grid to carve against (any stone layout works — the
+  // contracts below are about the DIFF, not the base).
+  const baseGrid = (seed: number) => loadMap(seed, 2, "bright").grid;
+
+  it("root breaches tunnel straight through rock between two floor spaces", () => {
+    let totalBreaches = 0;
+    for (const seed of [1, 7, 42, 777, 2024]) {
+      const before = baseGrid(seed);
+      const after = clone(before);
+      applyBiomeQuirks(after, [], "overgrown", prng(seed));
+      const changes = diff(before, after);
+      totalBreaches += changes.length;
+      // At most 8 tunnels of at most 3 tiles each.
+      expect(changes.length).toBeLessThanOrEqual(24);
+      for (const c of changes) {
+        expect(c.from).toBe(1); // only ever wall → floor
+        expect(c.to).toBe(0);
+        // Every carved cell is part of a through-tunnel: in the carved grid it
+        // connects onward on at least two sides (its tunnel neighbors / the
+        // floor spaces at the ends) — never a dead-end scratch in the rock.
+        expect(floorNeighbors(after, c.x, c.y)).toBeGreaterThanOrEqual(2);
+        // Never the border ring.
+        expect(c.x).toBeGreaterThanOrEqual(1);
+        expect(c.y).toBeGreaterThanOrEqual(1);
+        expect(c.x).toBeLessThanOrEqual(MAP_W - 2);
+        expect(c.y).toBeLessThanOrEqual(MAP_H - 2);
+      }
+      expect(changes.length).toBeGreaterThan(0); // every floor gets its loops
+    }
+    expect(totalBreaches).toBeGreaterThan(5); // and the sweep shows real punch
+  });
+
+  it("burial niches carve 1-tile pockets off straight corridors, never breaches", () => {
+    let totalNiches = 0;
+    for (const seed of [1, 7, 42, 777, 2024]) {
+      const before = baseGrid(seed);
+      const after = clone(before);
+      applyBiomeQuirks(after, [], "crypt", prng(seed));
+      const changes = diff(before, after);
+      totalNiches += changes.length;
+      for (const c of changes) {
+        expect(c.from).toBe(1); // only ever wall → floor
+        // A pocket: exactly ONE floor neighbor in the carved grid (the corridor
+        // tile it opens onto) — so a niche can never join two floor spaces.
+        expect(floorNeighbors(after, c.x, c.y)).toBe(1);
+        // Never touches the border ring.
+        expect(c.x).toBeGreaterThanOrEqual(1);
+        expect(c.y).toBeGreaterThanOrEqual(1);
+        expect(c.x).toBeLessThanOrEqual(MAP_W - 2);
+        expect(c.y).toBeLessThanOrEqual(MAP_H - 2);
+      }
+    }
+    expect(totalNiches).toBeGreaterThan(0); // corridors actually grow pockets
+  });
+
+  it("organic bulges only melt floor-adjacent walls, leaving the border solid", () => {
+    let totalMelted = 0;
+    for (const seed of [1, 7, 42, 777, 2024]) {
+      const before = baseGrid(seed);
+      const after = clone(before);
+      applyBiomeQuirks(after, [], "flesh", prng(seed));
+      const changes = diff(before, after);
+      totalMelted += changes.length;
+      for (const c of changes) {
+        expect(c.from).toBe(1); // bulge-only erosion: wall → floor, never the reverse
+        expect(floorNeighbors(before, c.x, c.y)).toBeGreaterThanOrEqual(1);
+        expect(c.x).toBeGreaterThanOrEqual(1);
+        expect(c.y).toBeGreaterThanOrEqual(1);
+        expect(c.x).toBeLessThanOrEqual(MAP_W - 2);
+        expect(c.y).toBeLessThanOrEqual(MAP_H - 2);
+      }
+    }
+    expect(totalMelted).toBeGreaterThan(0); // the melt actually fires
+  });
+
+  it("leaves stone, frost and (until PR C) ember/goldvault untouched", () => {
+    for (const biome of ["stone", "frost", "ember", "goldvault"] as const) {
+      const before = baseGrid(42);
+      const after = clone(before);
+      applyBiomeQuirks(after, [], biome, prng(42));
+      expect(after).toEqual(before);
+    }
+  });
+
+  it("never shifts the lighting roll: matched-preset seeds keep stone's lighting", () => {
+    // Quirks draw from the second RNG stream only. When a quirked biome rolls
+    // the same archetype as stone, the main stream is draw-for-draw identical,
+    // so the lighting roll must land the same — even though the grid differs.
+    for (const biome of ["overgrown", "crypt", "flesh"] as const) {
+      let matched = 0;
+      for (let s = 0; s < 60; s++) {
+        const stone = loadMap(s, 3);
+        const quirked = loadMap(s, 3, undefined, biome);
+        if (quirked.preset === stone.preset) {
+          matched++;
+          expect(quirked.lighting).toBe(stone.lighting);
+        }
+      }
+      expect(matched).toBeGreaterThan(0);
+    }
+  });
+
+  it("reshapes matched-preset floors: the quirk is visible beyond the weight table", () => {
+    // Counterpart to the quirkless-biome pin above: for the quirked biomes a
+    // matched archetype must now yield a DIFFERENT grid on at least some seeds.
+    for (const biome of ["overgrown", "crypt", "flesh"] as const) {
+      let differs = 0;
+      for (let s = 0; s < 40; s++) {
+        const stone = loadMap(s, 2, "bright");
+        const quirked = loadMap(s, 2, "bright", biome);
+        if (quirked.preset === stone.preset && JSON.stringify(quirked.grid) !== JSON.stringify(stone.grid)) {
+          differs++;
+        }
+      }
+      expect(differs).toBeGreaterThan(0);
+    }
+  });
+
+  it("survives a full descent: every floor 1-12 generates connected through the band transitions", () => {
+    // Mirrors DungeonRoom.enterFloor exactly (same per-depth seed mixing), so
+    // this is a real descent minus the walking: stone → overgrown at 5,
+    // overgrown → crypt at 10, quirks kicking in mid-run.
+    for (const baseSeed of [17, 4242, 987654321]) {
+      for (let depth = 1; depth <= 12; depth++) {
+        const seed = (baseSeed ^ Math.imul(depth, 0x9e3779b1)) >>> 0;
+        const { grid, spawns } = loadMap(seed, depth);
+        const start = spawns[0];
+        const reachable = reachableFloorCount(grid, Math.floor(start.x / TILE), Math.floor(start.y / TILE));
+        expect(reachable).toBe(totalFloor(grid));
+      }
+    }
+  });
+
+  it("keeps quirked floors fully connected across a wide seed sweep", () => {
+    // The heavyweight harness of design rule 5: floor-opening quirks cannot
+    // disconnect anything, and this proves it empirically per biome.
+    for (const biome of ["overgrown", "crypt", "flesh"] as const) {
+      for (let seed = 0; seed < 25; seed++) {
+        const { grid, spawns } = loadMap(seed, 2, "bright", biome);
+        const start = spawns[0];
+        const reachable = reachableFloorCount(grid, Math.floor(start.x / TILE), Math.floor(start.y / TILE));
+        expect(reachable).toBe(totalFloor(grid));
       }
     }
   });
