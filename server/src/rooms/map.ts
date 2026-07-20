@@ -218,11 +218,12 @@ function hashString(s: string): number {
  * never the main one, so a quirk can never shift room placement, corridor
  * flips, or the lighting roll of a given seed.
  *
- * The PR B quirks below only ever turn wall INTO floor, so they cannot
- * disconnect anything — connectivity is safe by construction. PR C adds the
- * wall-adding quirks (ember scorched chasms + the goldvault treasury fill),
- * which need containment guarantees instead. Frost has no carve quirk on
- * purpose: its big glacial halls (the GLACIAL preset) ARE the quirk.
+ * Breaches, niches and bulges only ever turn wall INTO floor, so they cannot
+ * disconnect anything — connectivity is safe by construction. Ember's
+ * scorched chasms are the set's one wall-ADDING quirk and carry containment
+ * guarantees instead (see scorchedChasms). Frost has no carve quirk on
+ * purpose: its big glacial halls (the GLACIAL preset) ARE the quirk; and
+ * goldvault's treasury fill is a prop pass in loadMap, not a carve.
  *
  * Exported for direct unit tests of each quirk's contract (map.test.ts).
  */
@@ -242,8 +243,53 @@ export function applyBiomeQuirks(
     case "flesh":
       organicBulges(grid, quirkRand);
       break;
-    // stone: untouched baseline. frost/goldvault: no carve quirk (yet — PR C
-    // gives goldvault its treasury fill). ember: scorched chasms land in PR C.
+    case "ember":
+      scorchedChasms(grid, rooms, quirkRand);
+      break;
+    // stone: untouched baseline. frost: no carve quirk on purpose (glacial IS
+    // its quirk). goldvault: its treasury fill is a PROP pass, not a carve —
+    // see treasuryFill, called from loadMap after normal prop placement.
+  }
+}
+
+// Scorched chasms (ember): big rooms get a 2-3 tile wall blob re-added near
+// the middle — rendered in ember's near-black rock, it reads as a collapse /
+// lava pit. Arenas with an obstacle to fight around instead of empty halls.
+// This is the set's one wall-ADDING quirk, so it carries containment
+// guarantees instead of the carve-only safety argument:
+//  - blobs are >=2 wide on both axes, so every blob tile keeps <=2 floor
+//    neighbors and the nub-pruner can never eat the pit;
+//  - a blob keeps a >=2-tile floor ring inside its room, so nothing that
+//    crosses the room (corridors included) can be pinched off;
+//  - a blob never covers the room's center tile — that tile is load-bearing
+//    downstream (spawns, the exit pick, and the prop flood-fill start are all
+//    room centers). A 7x7 room can't fit a blob that dodges its center with
+//    the ring intact, so those stay open arenas.
+const CHASM_MIN_SIDE = 7; // room must be at least this on both axes
+const CHASM_CHANCE = 0.8; // per eligible room — a few big halls stay open
+const CHASM_RING = 2; // guaranteed floor ring between blob and room walls
+
+function scorchedChasms(grid: number[][], rooms: Rect[], rand: () => number): void {
+  for (const room of rooms) {
+    if (room.w < CHASM_MIN_SIDE || room.h < CHASM_MIN_SIDE) continue;
+    if (rand() >= CHASM_CHANCE) continue;
+    const bw = 2 + Math.floor(rand() * 2); // 2-3
+    const bh = 2 + Math.floor(rand() * 2);
+    const center = roomCenter(room);
+    // Every placement that keeps the ring AND dodges the center tile.
+    const options: { x: number; y: number }[] = [];
+    for (let x0 = room.x + CHASM_RING; x0 + bw <= room.x + room.w - CHASM_RING; x0++) {
+      for (let y0 = room.y + CHASM_RING; y0 + bh <= room.y + room.h - CHASM_RING; y0++) {
+        const coversCenter =
+          center.x >= x0 && center.x < x0 + bw && center.y >= y0 && center.y < y0 + bh;
+        if (!coversCenter) options.push({ x: x0, y: y0 });
+      }
+    }
+    if (options.length === 0) continue;
+    const { x, y } = options[Math.floor(rand() * options.length)];
+    for (let yy = y; yy < y + bh; yy++) {
+      for (let xx = x; xx < x + bw; xx++) grid[yy][xx] = 1;
+    }
   }
 }
 
@@ -660,6 +706,68 @@ function placeSecrets(
 // minus the immovable anvil) so every cache crate can actually be smashed for loot.
 const SECRET_CRATE_FRAMES = [82, 63, 73, 75]; // keg, crate stack, barrel, crates
 
+// Treasury fill (goldvault, floorplans PR C). Room-interior crate clusters:
+// seed tiles sprout on open floor (no wall neighbor — placeProps owns the
+// edges) and each cluster spreads to some orthogonal neighbors, so the hoard
+// reads as heaps rather than a sprinkle. Every crate is breakable (feeds the
+// key hunt + the treasure mood) and added under the same one-at-a-time
+// connectivity guard as all props, so a heap can never wall anything off.
+const TREASURY_CLUSTER_CHANCE = 0.025; // per interior floor tile → a cluster seed
+const TREASURY_SPREAD_CHANCE = 0.55; // per neighbor of a seed → the heap grows
+
+function treasuryFill(
+  grid: number[][],
+  rooms: Rect[],
+  start: { x: number; y: number },
+  existing: Prop[],
+  exclude: Set<string>
+): Prop[] {
+  const isWall = (x: number, y: number) =>
+    x < 0 || y < 0 || x >= MAP_W || y >= MAP_H || grid[y][x] === 1;
+
+  let totalFloor = 0;
+  for (let y = 0; y < MAP_H; y++) for (let x = 0; x < MAP_W; x++) if (grid[y][x] === 0) totalFloor++;
+
+  // Guard against the real walkable space: everything already solid counts.
+  const blocked = new Set<string>(existing.map((p) => `${p.x},${p.y}`));
+  const crates: Prop[] = [];
+
+  const tryCrate = (x: number, y: number) => {
+    const key = `${x},${y}`;
+    if (grid[y][x] !== 0 || exclude.has(key) || blocked.has(key)) return;
+    blocked.add(key);
+    if (reachableCount(grid, start, blocked) !== totalFloor - blocked.size) {
+      blocked.delete(key);
+      return;
+    }
+    const frame = SECRET_CRATE_FRAMES[Math.floor(coordHash(x, y, 8) * SECRET_CRATE_FRAMES.length)];
+    crates.push({ x, y, frame, breakable: true });
+  };
+
+  // Interiors only: scan each room's inner tiles so corridors stay clear for
+  // kiting between heaps. Deterministic for a grid (coordHash, no RNG draw).
+  for (const room of rooms) {
+    for (let y = room.y; y < room.y + room.h; y++) {
+      for (let x = room.x; x < room.x + room.w; x++) {
+        if (grid[y][x] !== 0) continue;
+        const wallNeighbors =
+          (isWall(x, y - 1) ? 1 : 0) +
+          (isWall(x + 1, y) ? 1 : 0) +
+          (isWall(x, y + 1) ? 1 : 0) +
+          (isWall(x - 1, y) ? 1 : 0);
+        if (wallNeighbors !== 0) continue; // edges belong to placeProps
+        if (coordHash(x, y, 6) >= TREASURY_CLUSTER_CHANCE) continue;
+
+        tryCrate(x, y); // the heap's anchor…
+        for (const [nx, ny] of [[x, y - 1], [x + 1, y], [x, y + 1], [x - 1, y]] as const) {
+          if (coordHash(nx, ny, 7) < TREASURY_SPREAD_CHANCE) tryCrate(nx, ny);
+        }
+      }
+    }
+  }
+  return crates;
+}
+
 /**
  * Carve a sealed vault chamber off the dungeon: a small SxS room reachable only
  * through ONE doorway tile, so the server can seal that single tile to gate it.
@@ -861,9 +969,10 @@ export function loadMap(
     rooms.push(candidate);
   }
 
-  // Biome quirks reshape the freshly-carved grid (root breaches, niches, …) —
-  // a no-op scaffold until PR B/C. Runs before pruning so the pruner tidies up
-  // after them, and before all placement so downstream code sees the final grid.
+  // Biome quirks reshape the freshly-carved grid (root breaches, burial
+  // niches, organic bulges, scorched chasms). Runs before pruning so the
+  // pruner tidies up after them, and before all placement so downstream code
+  // sees the final grid.
   applyBiomeQuirks(grid, rooms, biome, quirkRand);
 
   // Clean up thin wall fragments the carving (or a quirk) leaves behind.
@@ -906,6 +1015,20 @@ export function loadMap(
   const vault: VaultPlacement | null = vaultCarve
     ? { chest: vaultCarve.chest, door: vaultCarve.door }
     : null;
+
+  // Goldvault treasury fill (floorplans PR C): on top of the treasury preset's
+  // crate-heavy room EDGES, scatter breakable crate clusters through room
+  // INTERIORS — a treasury is FULL of things to smash. A prop pass, not a
+  // carve (grid-pure via coordHash, connectivity-guarded like all props), so
+  // it lives here after normal placement rather than in applyBiomeQuirks.
+  if (biome === "goldvault" && rooms.length > 0) {
+    const exclude = new Set<string>([
+      ...(vaultCarve?.cells ?? []),
+      `${exit.x},${exit.y}`,
+      ...spawns.map((s) => `${Math.floor(s.x / TILE)},${Math.floor(s.y / TILE)}`),
+    ]);
+    props.push(...treasuryFill(grid, rooms, start, props, exclude));
+  }
 
   // Lighting mode — rolled last so it never perturbs the geometry RNG above (a
   // given seed keeps its exact layout). Independent of the preset. Floor 1 is

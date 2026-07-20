@@ -273,10 +273,11 @@ describe("biome floorplans (PR A: weights + plumbing)", () => {
   it("quirkless biomes change shape ONLY via the weight table: same archetype as stone ⇒ stone's exact grid", () => {
     // When a biome's weighted pick lands on the same archetype stone would
     // roll, every subsequent main-stream draw lines up — so a biome with no
-    // carve quirk must yield stone's exact grid. Holds for ember until PR C's
-    // chasms (replace this pin with the chasm containment tests then), and for
-    // frost permanently (its glacial preset IS its quirk).
-    for (const biome of ["ember", "frost"] as const) {
+    // carve quirk must yield stone's exact grid. With PR C every biome quirk is
+    // in, so this pin holds for frost alone — permanently, by design (its
+    // glacial preset IS its quirk). Goldvault is grid-identical too but its
+    // treasury fill changes props, so it gets its own pin below.
+    for (const biome of ["frost"] as const) {
       let matched = 0;
       for (let s = 0; s < 40; s++) {
         const stone = loadMap(s, 2, "bright");
@@ -507,8 +508,10 @@ describe("biome quirks (PR B: floor-opening carves)", () => {
     expect(totalMelted).toBeGreaterThan(0); // the melt actually fires
   });
 
-  it("leaves stone, frost and (until PR C) ember/goldvault untouched", () => {
-    for (const biome of ["stone", "frost", "ember", "goldvault"] as const) {
+  it("leaves stone, frost and goldvault grids untouched", () => {
+    // goldvault's treasury identity lives in props, not the grid — its carve
+    // hook must stay a pass-through.
+    for (const biome of ["stone", "frost", "goldvault"] as const) {
       const before = baseGrid(42);
       const after = clone(before);
       applyBiomeQuirks(after, [], biome, prng(42));
@@ -520,7 +523,7 @@ describe("biome quirks (PR B: floor-opening carves)", () => {
     // Quirks draw from the second RNG stream only. When a quirked biome rolls
     // the same archetype as stone, the main stream is draw-for-draw identical,
     // so the lighting roll must land the same — even though the grid differs.
-    for (const biome of ["overgrown", "crypt", "flesh"] as const) {
+    for (const biome of ["overgrown", "crypt", "flesh", "ember"] as const) {
       let matched = 0;
       for (let s = 0; s < 60; s++) {
         const stone = loadMap(s, 3);
@@ -537,7 +540,7 @@ describe("biome quirks (PR B: floor-opening carves)", () => {
   it("reshapes matched-preset floors: the quirk is visible beyond the weight table", () => {
     // Counterpart to the quirkless-biome pin above: for the quirked biomes a
     // matched archetype must now yield a DIFFERENT grid on at least some seeds.
-    for (const biome of ["overgrown", "crypt", "flesh"] as const) {
+    for (const biome of ["overgrown", "crypt", "flesh", "ember"] as const) {
       let differs = 0;
       for (let s = 0; s < 40; s++) {
         const stone = loadMap(s, 2, "bright");
@@ -553,9 +556,9 @@ describe("biome quirks (PR B: floor-opening carves)", () => {
   it("survives a full descent: every floor 1-12 generates connected through the band transitions", () => {
     // Mirrors DungeonRoom.enterFloor exactly (same per-depth seed mixing), so
     // this is a real descent minus the walking: stone → overgrown at 5,
-    // overgrown → crypt at 10, quirks kicking in mid-run.
+    // overgrown → crypt at 10, crypt → ember at 15, quirks kicking in mid-run.
     for (const baseSeed of [17, 4242, 987654321]) {
-      for (let depth = 1; depth <= 12; depth++) {
+      for (let depth = 1; depth <= 16; depth++) {
         const seed = (baseSeed ^ Math.imul(depth, 0x9e3779b1)) >>> 0;
         const { grid, spawns } = loadMap(seed, depth);
         const start = spawns[0];
@@ -566,9 +569,10 @@ describe("biome quirks (PR B: floor-opening carves)", () => {
   });
 
   it("keeps quirked floors fully connected across a wide seed sweep", () => {
-    // The heavyweight harness of design rule 5: floor-opening quirks cannot
-    // disconnect anything, and this proves it empirically per biome.
-    for (const biome of ["overgrown", "crypt", "flesh"] as const) {
+    // The heavyweight harness of design rule 5: carve quirks must never
+    // disconnect anything — the floor-openers by construction, the ember
+    // chasms by their containment ring — and this proves it empirically.
+    for (const biome of ["overgrown", "crypt", "flesh", "ember"] as const) {
       for (let seed = 0; seed < 25; seed++) {
         const { grid, spawns } = loadMap(seed, 2, "bright", biome);
         const start = spawns[0];
@@ -576,6 +580,154 @@ describe("biome quirks (PR B: floor-opening carves)", () => {
         expect(reachable).toBe(totalFloor(grid));
       }
     }
+  });
+});
+
+describe("ember scorched chasms (PR C: the wall-adding quirk)", () => {
+  // Diff a matched-preset ember floor against stone: the ONLY differences must
+  // be floor→wall (the blobs). No stray floor openings — chasms only add rock.
+  const emberBlobTiles = (seed: number) => {
+    const stone = loadMap(seed, 2, "bright");
+    const ember = loadMap(seed, 2, "bright", "ember");
+    if (ember.preset !== stone.preset) return null; // only compare like-for-like
+    const added: { x: number; y: number }[] = [];
+    for (let y = 0; y < MAP_H; y++) {
+      for (let x = 0; x < MAP_W; x++) {
+        if (stone.grid[y][x] === ember.grid[y][x]) continue;
+        // Every difference is a chasm: floor became wall, never the reverse.
+        expect(stone.grid[y][x]).toBe(0);
+        expect(ember.grid[y][x]).toBe(1);
+        added.push({ x, y });
+      }
+    }
+    return { added, ember, stone };
+  };
+
+  it("adds interior wall blobs to some big-room floors (the quirk fires)", () => {
+    let floorsWithChasm = 0;
+    for (let seed = 0; seed < 60; seed++) {
+      const r = emberBlobTiles(seed);
+      if (r && r.added.length > 0) floorsWithChasm++;
+    }
+    expect(floorsWithChasm).toBeGreaterThan(0);
+  });
+
+  it("keeps chasm blobs off every load-bearing tile (spawns + exit)", () => {
+    // Spawns are room centers and the exit is a room center too — the chasm
+    // placement dodges the center, so no blob can ever swallow one.
+    for (let seed = 0; seed < 60; seed++) {
+      const r = emberBlobTiles(seed);
+      if (!r || r.added.length === 0) continue;
+      const blob = new Set(r.added.map((c) => `${c.x},${c.y}`));
+      for (const s of r.ember.spawns) {
+        expect(blob.has(`${Math.floor(s.x / TILE)},${Math.floor(s.y / TILE)}`)).toBe(false);
+      }
+      expect(blob.has(`${r.ember.exit.x},${r.ember.exit.y}`)).toBe(false);
+    }
+  });
+
+  it("survives the nub-pruner: every chasm tile stays wall, ≥2 wide (never a lone nub)", () => {
+    // A blob is ≥2×2, so each of its tiles has a wall partner on some axis — the
+    // pruner (which only eats walls with 3+ floor neighbors) can't reach in.
+    for (let seed = 0; seed < 60; seed++) {
+      const r = emberBlobTiles(seed);
+      if (!r || r.added.length === 0) continue;
+      const blob = new Set(r.added.map((c) => `${c.x},${c.y}`));
+      for (const { x, y } of r.added) {
+        const wallPartner =
+          blob.has(`${x - 1},${y}`) || blob.has(`${x + 1},${y}`) ||
+          blob.has(`${x},${y - 1}`) || blob.has(`${x},${y + 1}`);
+        expect(wallPartner).toBe(true);
+        // …and it really is wall in the final grid (pruner left it alone).
+        expect(r.ember.grid[y][x]).toBe(1);
+      }
+    }
+  });
+
+  it("holds the ≥2-tile floor ring: chasm walls never touch the map border", () => {
+    for (let seed = 0; seed < 60; seed++) {
+      const r = emberBlobTiles(seed);
+      if (!r || r.added.length === 0) continue;
+      for (const { x, y } of r.added) {
+        expect(x).toBeGreaterThanOrEqual(1 + 2);
+        expect(y).toBeGreaterThanOrEqual(1 + 2);
+        expect(x).toBeLessThanOrEqual(MAP_W - 2 - 2);
+        expect(y).toBeLessThanOrEqual(MAP_H - 2 - 2);
+      }
+    }
+  });
+});
+
+describe("goldvault treasury fill (PR C: the crate hoard)", () => {
+  const isWall = (grid: number[][], x: number, y: number) =>
+    x < 0 || y < 0 || x >= MAP_W || y >= MAP_H || grid[y][x] === 1;
+
+  it("leaves the grid identical to stone but heaps far more crates than the treasury edges alone", () => {
+    let compared = 0;
+    for (let seed = 0; seed < 60; seed++) {
+      const gold = loadMap(seed, 2, "bright", "goldvault");
+      const stone = loadMap(seed, 2, "bright");
+      // The fill is a PROP pass, so goldvault's grid still matches stone's when
+      // the archetype matches (its identity is the hoard, not the geometry).
+      if (gold.preset === stone.preset) {
+        expect(gold.grid).toEqual(stone.grid);
+      }
+      // Interior crates: props with NO wall neighbor. placeProps only ever
+      // lands props on 1-wall-neighbor EDGES, so any 0-wall-neighbor prop is a
+      // treasury-fill crate — the signature that the fill actually ran.
+      const interiorCrates = gold.props.filter(
+        (p) =>
+          !isWall(gold.grid, p.x, p.y - 1) &&
+          !isWall(gold.grid, p.x + 1, p.y) &&
+          !isWall(gold.grid, p.x, p.y + 1) &&
+          !isWall(gold.grid, p.x - 1, p.y)
+      );
+      if (interiorCrates.length > 0) {
+        compared++;
+        for (const c of interiorCrates) {
+          expect(c.breakable).toBe(true); // every treasury crate is smashable
+          expect(gold.grid[c.y][c.x]).toBe(0); // on floor
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(0); // some goldvault floors grow a hoard
+  });
+
+  it("keeps goldvault fully connected with the whole hoard treated as solid", () => {
+    for (let seed = 0; seed < 40; seed++) {
+      const { grid, spawns, props } = loadMap(seed, 2, "bright", "goldvault");
+      const blocked = new Set(props.map((p) => `${p.x},${p.y}`));
+      expect(blocked.size).toBe(props.length); // no two crates share a tile
+      const start = spawns[0];
+      const seen = new Set<string>();
+      const stack: [number, number][] = [[Math.floor(start.x / TILE), Math.floor(start.y / TILE)]];
+      while (stack.length) {
+        const [x, y] = stack.pop()!;
+        if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) continue;
+        const key = `${x},${y}`;
+        if (grid[y][x] !== 0 || blocked.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+      }
+      expect(seen.size).toBe(totalFloor(grid) - props.length);
+    }
+  });
+
+  it("keeps the hoard off spawns and the exit", () => {
+    for (let seed = 0; seed < 40; seed++) {
+      const { spawns, exit, props } = loadMap(seed, 2, "bright", "goldvault");
+      const propTiles = new Set(props.map((p) => `${p.x},${p.y}`));
+      for (const s of spawns) {
+        expect(propTiles.has(`${Math.floor(s.x / TILE)},${Math.floor(s.y / TILE)}`)).toBe(false);
+      }
+      expect(propTiles.has(`${exit.x},${exit.y}`)).toBe(false);
+    }
+  });
+
+  it("is deterministic for a seed", () => {
+    expect(loadMap(2024, 2, "bright", "goldvault").props).toEqual(
+      loadMap(2024, 2, "bright", "goldvault").props
+    );
   });
 });
 
