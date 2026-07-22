@@ -136,14 +136,18 @@ new synced state.
   breakable-crate heaps — ~100 crates a floor). *Deferred stretch (own call,
   not shipped):* mirrored-symmetric goldvault layouts — the crate hoard already
   reads as a treasury, so the symmetry wasn't worth its risk yet.
-- **Special floors — trigger design.** Three special biome kits are SHIPPED
-  as art + valid biome names (`frost`, `goldvault`, `flesh` — sheets, client
-  textures, `DUNGEON_BIOME` override all work) but deliberately **not** in the
-  depth bands. Open design: how a party lands on one — rare roll on descend?
-  A visible "strange stairway" alternative exit? Depth-gated? Should
-  goldvault pair with loot/score modifiers (it begs to), frost with a
-  gameplay twist (slippery?), flesh with a mob-mix change? Decide, then it's
-  a small server change (a roll in `enterFloor` naming the biome).
+- **Special floors — trigger design + mechanics. Planned 2026-07-20** — full
+  design in [`special-floors-plan.md`](special-floors-plan.md). Three special
+  biome kits are SHIPPED as art + floorplans + valid biome names (`frost`,
+  `goldvault`, `flesh` — `DUNGEON_BIOME` override works) but deliberately **not**
+  in the depth bands. The plan gives each a trigger + mechanic: **goldvault** = a
+  "strange stairway" opt-in detour (gather-to-enter, hotter return via the
+  pressure clock; reuses the already-coded-but-dormant treasure spawns);
+  **frost** = ice sliding (players + mobs, physics in the sim loop; glacial open
+  floors + no chasms make it the safe biome to debut it); **flesh** = flesh-only
+  mobs/loot with M14 codex ties, triggered by a monthly world-corruption event
+  (not random floors). Phasing: goldvault (turnkey) → frost (physics) → flesh
+  (content, needs the daily's event scaffolding).
 
 **Gameplay / loot**
 - **Permanent weapon changes** — a way to make an equipped weapon stick rather
@@ -171,13 +175,16 @@ new synced state.
   continuously swinging.
 
 **Meta / retention** *(secondary to M13/M14 — build after the local layer lands)*
-- **Daily seed + anonymous leaderboard** — the generator is already fully
-  seeded, so "today's dungeon" is just seed = date hash surfaced as a lobby
-  option. Leaderboard = arcade-cabinet identity: a **claimed nickname** (no
-  auth, no email, no PII — impersonation is exactly as serious as it was on a
-  Galaga machine) posted with score/depth/date to a small server-side DB.
-  Within the refined arcade rule (see locked decisions); pairs with the
-  owner-telemetry item below, since the run-end summary is the score row.
+- **Daily dungeon + anonymous leaderboard. Planned 2026-07-20** — full design in
+  [`daily-dungeon-plan.md`](daily-dungeon-plan.md). A daily shared-goal challenge
+  (everyone on the same date-hashed seed pushing a community depth record) as a
+  low-friction hook to funnel players into private/public play. **Distributed**
+  (normal 4-player rooms + a server-tracked frontier), *not* one massive room.
+  MVP = pinned seed + one SQLite table + a community record; that same table also
+  feeds the general anonymous-nickname leaderboard and owner telemetry (the
+  `gameover` payload *is* the score row). Anonymous claimed nickname, no PII —
+  within the refined arcade rule. v2 "join the frontier" + monthly flesh
+  corruption are deferred phases in the plan.
 
 **Ops / telemetry**
 - **Owner telemetry** — log the run-end `"gameover"` summary server-side (no PII)
