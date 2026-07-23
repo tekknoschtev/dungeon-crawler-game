@@ -161,6 +161,19 @@ export class DungeonState extends Schema {
   // Run phase: "playing" | "gameover". Flips to "gameover" on a party wipe with no
   // lives left (drives the game-over overlay); "restart" rolls a fresh run.
   @type("string") phase: string = "playing";
+  // --- Strange stairway (special floors) ---
+  // Gather-to-enter state for this floor's strange stairway (the goldvault
+  // detour). The stairway's POSITION is static per floor and rides the one-shot
+  // "map" message like the exit — only this handful of dynamic values is synced,
+  // and only while a party is actually gathering. All 0 on floors without one.
+  // Living heroes currently standing in the gather zone.
+  @type("uint8") stairwayCount: number = 0;
+  // How many of them it takes to start the countdown ("all but one" — see
+  // stairwayQuorum). 0 when this floor has no stairway.
+  @type("uint8") stairwayNeed: number = 0;
+  // Seconds left on the entry countdown once quorum is standing; ticks down like
+  // respawnIn/unlockIn, and snaps back to 0 the moment quorum breaks. 0 = idle.
+  @type("number") stairwayIn: number = 0;
   @type({ map: Player }) players = new MapSchema<Player>();
   @type({ map: Mob }) mobs = new MapSchema<Mob>();
   @type({ map: Loot }) loot = new MapSchema<Loot>();

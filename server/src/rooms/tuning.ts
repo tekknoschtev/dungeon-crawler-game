@@ -220,6 +220,46 @@ export const BOMB_FRAME = 105; // Tiny Town sheet index the client renders (bomb
 export const GOLDVAULT_TREASURE_COUNT = 12; // drops scattered per goldvault floor
 export const TREASURE_SACK_CHANCE = 0.2; // share of drops that are the fat sack
 
+// --- Strange stairway (goldvault special-floor trigger) ----------------
+// An uncommon SECOND exit that appears on some floors (seeded presence +
+// position, on a dedicated RNG stream so it never perturbs geometry — see
+// map.ts). Standing on it as a party detours everyone into a goldvault
+// treasure floor; a return exit sends the whole room back to the same floor
+// to descend normally. Additive bonus content, not a branch (see
+// docs/special-floors-plan.md).
+// (Its per-floor rarity + placement rules are GENERATION constants and live with
+// the rest of the generator in map.ts — see STAIRWAY_CHANCE there.)
+export const STAIRWAY_GATHER_RADIUS = 28; // px — the gather zone a hero stands in (~1.75 tiles)
+export const STAIRWAY_COUNTDOWN = 3; // s the quorum must hold the zone before the room transitions
+// Gather-to-enter quorum = "all but one" (holdout-proof: a lone AFK/dead player
+// can't block the vault, but a real group has to converge). See stairwayQuorum.
+
+// --- Vault (strange-stairway detour) floor -----------------------------
+// The vault is a goldvault floor entered via the strange stairway: depth-scaled
+// mobs but a LIGHTER, non-ramping population — it reads as a smash-and-grab, not
+// a pressure cooker (the cost is paid on the flooded return, not in the vault).
+export const VAULT_MOB_BASE = 4; // calm starting population in the vault
+export const VAULT_MOB_MAX = 8; // ceiling even at full vault-heat (well under a normal floor)
+
+// The vault's reward chest: unlike the M4 chest it opens IMMEDIATELY (no lock,
+// no timer, no key) — a single swing cracks it. Grants a treasure jackpot to the
+// party and a unique gold trophy to the opener (see VAULT_RELICS). The points are
+// VAULT_CHEST_POINTS × depth × heat-multiplier × floor-mult, like a fat chest.
+export const VAULT_CHEST_POINTS = 120; // × depth — a jackpot base above the M4 chest's 60
+// Unique goldvault trophies the opener keeps for the run (score-screen flavor,
+// like relics — but a hand-picked gilded pool, distinct from the procedural M4
+// relic names). One is rolled per vault chest opened; see rollVaultRelic.
+export const VAULT_RELICS = [
+  "the Midas Coffer",
+  "the Gilded Fang",
+  "Aurelian's Hoard",
+  "the Sunken Crown",
+  "the Bullion Heart",
+  "the Coinforged Idol",
+  "the Dragon's Tithe",
+  "the Everfull Purse",
+];
+
 // --- Vault chest (M4) --------------------------------------------------
 // One vault per floor: visible from arrival, sealed behind a timed door that
 // opens once the floor's heat is already spicy. Cracking it open under fire pays

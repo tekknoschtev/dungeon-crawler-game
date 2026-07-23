@@ -53,6 +53,7 @@ Mobile-first, drop-in **co-op dive**. The loop:
 | **M13** | Run-end discoveries panel — the score screen becomes the run's museum (relics, weapons, bestiary, haul) | [#34](https://github.com/tekknoschtev/dungeon-crawler-game/pull/34) |
 | **M14** | Local codex + personal bests — localStorage bests/lifetime codex; lobby line, best-flash, NEW badges | [#35](https://github.com/tekknoschtev/dungeon-crawler-game/pull/35) |
 | **M15** | Depth biomes — derived tile kits per band (overgrown 5–9, crypt 10–14, ember 15+) with anti-tiling wall variants; README biome showcase | [#37](https://github.com/tekknoschtev/dungeon-crawler-game/pull/37), [#38](https://github.com/tekknoschtev/dungeon-crawler-game/pull/38) + ember PR |
+| — | Goldvault strange stairway — the first *special floor*: an uncommon seeded second exit; gather-to-enter (all-but-one quorum + 3s countdown) detours the whole room into a goldvault treasury, then a return exit lands them back on the same floor, flooded (the pressure clock never pauses) | [#46](https://github.com/tekknoschtev/dungeon-crawler-game/pull/46) |
 | — | Mobile HUD placement fix (stat HUD off the touch controls) | [#14](https://github.com/tekknoschtev/dungeon-crawler-game/pull/14) |
 
 Earlier systems already in place (not re-listed as backlog): CC0 art pass
@@ -136,18 +137,20 @@ new synced state.
   breakable-crate heaps — ~100 crates a floor). *Deferred stretch (own call,
   not shipped):* mirrored-symmetric goldvault layouts — the crate hoard already
   reads as a treasury, so the symmetry wasn't worth its risk yet.
-- **Special floors — trigger design + mechanics. Planned 2026-07-20** — full
-  design in [`special-floors-plan.md`](special-floors-plan.md). Three special
-  biome kits are SHIPPED as art + floorplans + valid biome names (`frost`,
-  `goldvault`, `flesh` — `DUNGEON_BIOME` override works) but deliberately **not**
-  in the depth bands. The plan gives each a trigger + mechanic: **goldvault** = a
-  "strange stairway" opt-in detour (gather-to-enter, hotter return via the
-  pressure clock; reuses the already-coded-but-dormant treasure spawns);
-  **frost** = ice sliding (players + mobs, physics in the sim loop; glacial open
-  floors + no chasms make it the safe biome to debut it); **flesh** = flesh-only
-  mobs/loot with M14 codex ties, triggered by a monthly world-corruption event
-  (not random floors). Phasing: goldvault (turnkey) → frost (physics) → flesh
-  (content, needs the daily's event scaffolding).
+- **Special floors — trigger design + mechanics. Planned 2026-07-20; goldvault
+  SHIPPED 2026-07-22 (#46)** — full design in
+  [`special-floors-plan.md`](special-floors-plan.md). Three special biome kits
+  shipped as art + floorplans + valid biome names (`frost`, `goldvault`,
+  `flesh`) but deliberately **not** in the depth bands; each needs a trigger +
+  mechanic. ~~**goldvault** = a "strange stairway" opt-in detour~~ — **done**:
+  gather-to-enter, whole-room transition, hotter return via the un-paused
+  pressure clock, and it lit up the dormant treasure spawns + treasury floorplan
+  exactly as predicted. Still open: **frost** = ice sliding (players + mobs,
+  physics in the sim loop; glacial open floors + no chasms make it the safe biome
+  to debut it) — needs a trigger decision and hands-on tuning; **flesh** =
+  flesh-only mobs/loot with M14 codex ties, triggered by a monthly
+  world-corruption event (not random floors), which needs the daily's event
+  scaffolding first.
 
 **Gameplay / loot**
 - **Permanent weapon changes** — a way to make an equipped weapon stick rather

@@ -905,3 +905,123 @@ describe("torchlit floors", () => {
     }
   });
 });
+
+describe("strange stairway (goldvault special-floor trigger)", () => {
+  // The stairway is uncommon (~25%), so assertions about placement need a sweep
+  // of seeds to find floors that rolled one. loadMap is expensive, so the sweep
+  // is generated ONCE here and every case below filters this shared result.
+  const SWEEP = Array.from({ length: 120 }, (_, i) => i + 1);
+  const FLOORS = SWEEP.map((seed) => loadMap(seed, 6));
+  const WITH_STAIRWAY = FLOORS.filter((m) => m.strangeStairway !== null);
+
+  it("is deterministic per seed, like every other placement", () => {
+    for (const seed of [7, 42, 1234, 90210]) {
+      expect(loadMap(seed, 5).strangeStairway).toEqual(loadMap(seed, 5).strangeStairway);
+    }
+  });
+
+  it("NEVER perturbs the main RNG stream — every pre-existing layout is bit-for-bit", () => {
+    // The whole safety argument for adding a seeded feature: it draws only from
+    // its own stream, so geometry, props, the vault, lighting and the exit of any
+    // seed are identical with the stairway suppressed and with it allowed.
+    for (const seed of [1, 2, 3, 77, 4242, 31337]) {
+      for (const depth of [2, 6, 11, 17]) {
+        const off = loadMap(seed, depth, undefined, undefined, "never");
+        const on = loadMap(seed, depth, undefined, undefined, "auto");
+        expect(on.grid).toEqual(off.grid);
+        expect(on.props).toEqual(off.props);
+        expect(on.spawns).toEqual(off.spawns);
+        expect(on.exit).toEqual(off.exit);
+        expect(on.vault).toEqual(off.vault);
+        expect(on.lighting).toBe(off.lighting);
+        expect(on.preset).toBe(off.preset);
+        expect(on.torches).toEqual(off.torches);
+      }
+    }
+  });
+
+  it("never appears on floor 1 (the on-ramp teaches the normal descent first)", () => {
+    for (const seed of SWEEP.slice(0, 40)) expect(loadMap(seed, 1).strangeStairway).toBeNull();
+  });
+
+  it("is suppressed outright when the caller forbids it (vault + return floors)", () => {
+    for (const seed of SWEEP.slice(0, 40)) {
+      expect(loadMap(seed, 6, undefined, undefined, "never").strangeStairway).toBeNull();
+    }
+  });
+
+  it('"always" (the DUNGEON_STAIRWAY override) skips both the roll and the floor-1 exemption', () => {
+    // The override exists so the detour can be exercised without reroll-fishing;
+    // it must beat the ~1-in-4 roll AND the floor-1 rule, on floor 1 included.
+    const forced = SWEEP.slice(0, 30).map((seed) => loadMap(seed, 1, undefined, undefined, "always"));
+    const found = forced.filter((m) => m.strangeStairway !== null);
+    // Not a hard 30/30: a cramped layout can still offer nowhere sensible to put
+    // one. It should be the overwhelming majority, though.
+    expect(found.length).toBeGreaterThan(forced.length * 0.8);
+  });
+
+  it("is uncommon but does appear — a treat, not a fixture", () => {
+    expect(WITH_STAIRWAY.length).toBeGreaterThan(0);
+    expect(WITH_STAIRWAY.length).toBeLessThan(FLOORS.length / 2); // well under half of all floors
+  });
+
+  it("sits on open floor, never on a wall, prop or crate tile", () => {
+    for (const m of WITH_STAIRWAY) {
+      const s = m.strangeStairway!;
+      expect(m.grid[s.y][s.x]).toBe(0);
+      expect(m.props.some((p) => p.x === s.x && p.y === s.y)).toBe(false);
+    }
+  });
+
+  it("keeps its whole gather ring standable, so a party can cluster on it", () => {
+    for (const m of WITH_STAIRWAY) {
+      const s = m.strangeStairway!;
+      const solid = new Set(m.props.map((p) => `${p.x},${p.y}`));
+      for (const [nx, ny] of [
+        [s.x, s.y - 1],
+        [s.x + 1, s.y],
+        [s.x, s.y + 1],
+        [s.x - 1, s.y],
+      ] as const) {
+        expect(m.grid[ny][nx]).toBe(0);
+        expect(solid.has(`${nx},${ny}`)).toBe(false);
+      }
+    }
+  });
+
+  it("is a real detour: away from where the party lands, and from the descent", () => {
+    for (const m of WITH_STAIRWAY) {
+      const s = m.strangeStairway!;
+      const exitD2 = (s.x - m.exit.x) ** 2 + (s.y - m.exit.y) ** 2;
+      expect(exitD2).toBeGreaterThanOrEqual(6 * 6);
+      // Measured against the ARRIVAL spawns (the first four room centers — all a
+      // 4-player room ever uses), not every room center on the floor.
+      for (const sp of m.spawns.slice(0, 4)) {
+        const d2 = (s.x - Math.floor(sp.x / TILE)) ** 2 + (s.y - Math.floor(sp.y / TILE)) ** 2;
+        expect(d2).toBeGreaterThanOrEqual(8 * 8);
+      }
+    }
+  });
+
+  it("never lands inside the sealed vault chamber", () => {
+    for (const m of WITH_STAIRWAY) {
+      const s = m.strangeStairway!;
+      if (!m.vault) continue;
+      expect(s).not.toEqual(m.vault.chest);
+      expect(s).not.toEqual(m.vault.door);
+    }
+  });
+
+  it("varies by seed rather than being a fixed tile", () => {
+    const spots = new Set(WITH_STAIRWAY.map((m) => `${m.strangeStairway!.x},${m.strangeStairway!.y}`));
+    expect(spots.size).toBeGreaterThan(1);
+  });
+
+  it("appears on goldvault floors too (so the dev override can exercise it)", () => {
+    // Goldvault's treasury fill makes loadMap costly, so this uses a short sweep.
+    const hits = SWEEP.slice(0, 24).filter(
+      (seed) => loadMap(seed, 6, undefined, "goldvault").strangeStairway !== null
+    );
+    expect(hits.length).toBeGreaterThan(0);
+  });
+});

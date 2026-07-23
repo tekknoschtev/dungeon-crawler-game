@@ -475,6 +475,10 @@ export interface LoadedMap {
   props: Prop[];
   /** the descent point in TILE coords; standing on it lets the party go deeper */
   exit: { x: number; y: number };
+  /** the strange stairway's TILE coords (special floors): an uncommon second exit
+   *  that detours a gathered party into a goldvault treasure floor, or null when
+   *  this floor has none (the common case). Seeded; see placeStrangeStairway. */
+  strangeStairway: { x: number; y: number } | null;
   /** the sealed vault chamber, or null when none could be placed (see VaultPlacement) */
   vault: VaultPlacement | null;
   /** which floor archetype was rolled for this seed (server-side info, not sent to clients) */
@@ -768,6 +772,70 @@ function treasuryFill(
   return crates;
 }
 
+// Strange stairway (special floors — docs/special-floors-plan.md). An UNCOMMON
+// second exit, visually distinct from the descent: a party that gathers on it is
+// detoured into a goldvault treasure floor, then returned to this same floor to
+// descend normally. Presence and position are seeded like everything else, but
+// drawn from a DEDICATED RNG stream (see loadMap) so adding this feature could
+// not shift a single existing layout, lighting roll, or quirk — the same safety
+// argument the quirk stream carries.
+//
+// Placement rules make it a real detour you choose to walk to, and a spot a
+// party can physically cluster on:
+//  - far from every spawn (you have to go find it) and from the descent (so the
+//    two exits never blur together into one ambiguous blob of glow);
+//  - all four orthogonal neighbors open floor, so up to four heroes can stand in
+//    the gather zone at once without shoving each other into walls;
+//  - never on a prop/crate tile or inside the sealed vault chamber.
+/** How loadMap should treat the strange stairway — see the `stairway` param. */
+export type StairwayMode = "auto" | "always" | "never";
+
+const STAIRWAY_CHANCE = 0.25; // per floor below the first — an uncommon treat, not every run
+const STAIRWAY_MIN_SPAWN_DIST = 8; // tiles from where the party lands — a detour, not a doorstep
+const STAIRWAY_MIN_EXIT_DIST = 6; // tiles from the descent, so the two read as separate places
+// `spawns` is EVERY room center, but a party only ever lands on the first few (the
+// room hands out spawns[i % len] for its at-most-four clients). The distance rule
+// means "not on the doorstep of where you arrive", so it's measured against those
+// — checking all of them would reject most layouts outright on a warren floor,
+// where almost every tile is near some room center.
+const STAIRWAY_ARRIVAL_SPAWNS = 4; // mirrors DungeonRoom.maxClients
+
+function placeStrangeStairway(
+  grid: number[][],
+  spawns: { x: number; y: number }[], // TILE coords — the ARRIVAL spawns only
+  exit: { x: number; y: number },
+  props: Prop[],
+  exclude: Set<string>,
+  rand: () => number
+): { x: number; y: number } | null {
+  const solid = new Set(props.map((p) => `${p.x},${p.y}`));
+  const open = (x: number, y: number) =>
+    x >= 0 && y >= 0 && x < MAP_W && y < MAP_H && grid[y][x] === 0 && !solid.has(`${x},${y}`);
+
+  const candidates: { x: number; y: number }[] = [];
+  for (let y = 1; y < MAP_H - 1; y++) {
+    for (let x = 1; x < MAP_W - 1; x++) {
+      if (!open(x, y) || exclude.has(`${x},${y}`)) continue;
+      // Room to gather: the whole plus-shape around it must be standable.
+      if (!open(x, y - 1) || !open(x + 1, y) || !open(x, y + 1) || !open(x - 1, y)) continue;
+      if ((x - exit.x) ** 2 + (y - exit.y) ** 2 < STAIRWAY_MIN_EXIT_DIST ** 2) continue;
+      let farFromSpawns = true;
+      for (const s of spawns) {
+        if ((s.x - x) ** 2 + (s.y - y) ** 2 < STAIRWAY_MIN_SPAWN_DIST ** 2) {
+          farFromSpawns = false;
+          break;
+        }
+      }
+      if (!farFromSpawns) continue;
+      candidates.push({ x, y });
+    }
+  }
+  // A cramped layout can legitimately offer nowhere sensible — then this floor
+  // simply has no stairway (it's uncommon by design, so that reads as normal).
+  if (candidates.length === 0) return null;
+  return candidates[Math.floor(rand() * candidates.length)];
+}
+
 /**
  * Carve a sealed vault chamber off the dungeon: a small SxS room reachable only
  * through ONE doorway tile, so the server can seal that single tile to gate it.
@@ -894,13 +962,23 @@ function carveVault(
  * so every co-op client and every re-run agrees. Biome is itself a pure band
  * lookup on depth (see biomeForDepth), and stone — floors 1-4 — keeps the
  * legacy seed-only layouts bit-for-bit. Beyond geometry, `depth` only gates
- * the lighting roll (floor 1 is never dark — see below).
+ * the lighting roll and the strange-stairway roll (floor 1 gets neither — see
+ * below).
+ *
+ * `stairway` controls the strange stairway: "auto" is the real rule (an uncommon
+ * seeded roll, never on floor 1); "never" suppresses it outright — the room passes
+ * that for the vault floor the stairway leads TO (no nested vaults) and for the
+ * floor a party is returned to (the detour is spent, so the vault can't be farmed
+ * in a loop); "always" is the DUNGEON_STAIRWAY dev override, which skips both the
+ * roll and the floor-1 exemption so the feature can be exercised without
+ * reroll-fishing. See DungeonRoom.enterFloor.
  */
 export function loadMap(
   seed: number,
   depth = 1,
   forced?: Lighting,
-  forcedBiome?: Biome
+  forcedBiome?: Biome,
+  stairway: StairwayMode = "auto"
 ): LoadedMap {
   const rand = mulberry32(seed);
   const randInt = (min: number, max: number) =>
@@ -1016,6 +1094,38 @@ export function loadMap(
     ? { chest: vaultCarve.chest, door: vaultCarve.door }
     : null;
 
+  // Strange stairway (special floors): the goldvault detour's trigger. Rolled on
+  // its OWN RNG stream — like the quirk stream — so neither the presence roll nor
+  // the position pick can consume a draw from the main stream, and every layout,
+  // lighting roll and quirk that existed before this feature is bit-for-bit
+  // unchanged. Floor 1 is exempt for the same reason it's never dark: the opening
+  // floor should teach the normal descent before it offers a strange one.
+  let strangeStairway: { x: number; y: number } | null = null;
+  if (stairway !== "never" && rooms.length > 0 && (depth > 1 || stairway === "always")) {
+    const stairRand = mulberry32((seed ^ hashString("stairway")) >>> 0);
+    if (stairway === "always" || stairRand() < STAIRWAY_CHANCE) {
+      strangeStairway = placeStrangeStairway(
+        grid,
+        rooms.slice(0, STAIRWAY_ARRIVAL_SPAWNS).map(roomCenter),
+        exit,
+        props,
+        new Set(vaultCarve?.cells ?? []),
+        stairRand
+      );
+    }
+  }
+  // Keep crates/secrets off the stairway and its gather ring, so the zone a party
+  // has to stand in can't be walled up by a treasure heap.
+  const stairwayCells = strangeStairway
+    ? [
+        `${strangeStairway.x},${strangeStairway.y}`,
+        `${strangeStairway.x},${strangeStairway.y - 1}`,
+        `${strangeStairway.x + 1},${strangeStairway.y}`,
+        `${strangeStairway.x},${strangeStairway.y + 1}`,
+        `${strangeStairway.x - 1},${strangeStairway.y}`,
+      ]
+    : [];
+
   // Goldvault treasury fill (floorplans PR C): on top of the treasury preset's
   // crate-heavy room EDGES, scatter breakable crate clusters through room
   // INTERIORS — a treasury is FULL of things to smash. A prop pass, not a
@@ -1025,6 +1135,7 @@ export function loadMap(
     const exclude = new Set<string>([
       ...(vaultCarve?.cells ?? []),
       `${exit.x},${exit.y}`,
+      ...stairwayCells,
       ...spawns.map((s) => `${Math.floor(s.x / TILE)},${Math.floor(s.y / TILE)}`),
     ]);
     props.push(...treasuryFill(grid, rooms, start, props, exclude));
@@ -1057,6 +1168,7 @@ export function loadMap(
     const exclude = new Set<string>([
       ...(vaultCarve?.cells ?? []),
       `${exit.x},${exit.y}`,
+      ...stairwayCells,
       ...spawns.map((s) => `${Math.floor(s.x / TILE)},${Math.floor(s.y / TILE)}`),
     ]);
     const secrets = placeSecrets(grid, start, torches, props, exclude);
@@ -1064,5 +1176,5 @@ export function loadMap(
     secretLoot = secrets.loot;
   }
 
-  return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props, exit, vault, preset: preset.name, lighting, biome, torches, secretLoot };
+  return { tile: TILE, width: MAP_W, height: MAP_H, grid, spawns, props, exit, strangeStairway, vault, preset: preset.name, lighting, biome, torches, secretLoot };
 }
