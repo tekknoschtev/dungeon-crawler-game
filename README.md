@@ -64,6 +64,7 @@ prod; an invalid value is ignored and the game behaves normally.
 | `DUNGEON_BIOME` | The biome tile kit on every floor (incl. the special kits that aren't in the depth bands) | `stone` `overgrown` `crypt` `ember` `frost` `goldvault` `flesh` |
 | `DUNGEON_LIGHTING` | The lighting mode on every floor (overrides "floor 1 is always bright") | `bright` `dark` `torchlit` |
 | `DUNGEON_SEED` | The base seed → **the whole run is reproducible** floor-for-floor; restart replays the identical run | any integer |
+| `DUNGEON_STAIRWAY` | A strange stairway on **every** floor (skips both its ~1-in-4 roll and the "never on floor 1" rule), so the goldvault detour is reachable without reroll-fishing | `always` |
 | `PORT` | The server port | default `2567` |
 
 ```bash
@@ -77,7 +78,9 @@ $env:DUNGEON_BIOME='ember'; npm run dev
 
 The server logs a line per floor — `Floor 1 — preset: hall, lighting: bright,
 biome: ember (seed 627383556)` — so you can confirm an override took effect (a
-typo'd value silently falls back to normal).
+typo'd value silently falls back to normal). The line also names a `strange
+stairway` when the floor has one, and marks the goldvault side trip itself as
+`Floor 1 [vault detour]`.
 
 ---
 

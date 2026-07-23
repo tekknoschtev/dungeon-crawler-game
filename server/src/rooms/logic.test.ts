@@ -19,6 +19,10 @@ import {
   pickAggroTarget,
   heatLevel,
   targetMobCount,
+  vaultMobTarget,
+  stairwayQuorum,
+  vaultChestPoints,
+  rollVaultRelic,
   spawnInterval,
   extendSpawnLull,
   scaleMobHp,
@@ -46,6 +50,10 @@ import {
   SCORE_DEPTH_BONUS,
   LOOT_SCORE,
   CHEST_BASE_POINTS,
+  VAULT_MOB_BASE,
+  VAULT_MOB_MAX,
+  VAULT_CHEST_POINTS,
+  VAULT_RELICS,
   RELIC_ADJECTIVES,
   RELIC_NOUNS,
   MOBS,
@@ -338,6 +346,25 @@ describe("targetMobCount", () => {
   });
 });
 
+describe("vaultMobTarget (strange-stairway detour)", () => {
+  it("lerps calm→hot between base and max", () => {
+    expect(vaultMobTarget(0, 4, 8)).toBe(4);
+    expect(vaultMobTarget(1, 4, 8)).toBe(8);
+    expect(vaultMobTarget(0.5, 4, 8)).toBe(6);
+  });
+
+  it("takes no per-depth population bonus (unlike a normal floor)", () => {
+    // vaultMobTarget has no depth arg at all — depth toughens mobs, not the count.
+    expect(vaultMobTarget(0)).toBe(VAULT_MOB_BASE);
+    expect(vaultMobTarget(1)).toBe(VAULT_MOB_MAX);
+  });
+
+  it("stays well under a normal deep floor's population", () => {
+    // At full heat, a deep normal floor is a wall of bodies; the vault is not.
+    expect(vaultMobTarget(1)).toBeLessThan(targetMobCount(1, 12));
+  });
+});
+
 describe("spawnInterval", () => {
   it("is long when calm and short when hot", () => {
     expect(spawnInterval(0, 5, 1)).toBe(5);
@@ -517,6 +544,45 @@ describe("vault chest (M4)", () => {
       expect(deep).not.toBe(shallow);
       // At depth 9 the floor tier is mythic, so rng=0 lands on mythic's first words.
       expect(deep).toContain(RELIC_ADJECTIVES.mythic[0]);
+    });
+  });
+});
+
+describe("strange stairway / vault detour (special floors)", () => {
+  describe("stairwayQuorum (all-but-one, holdout-proof)", () => {
+    it("asks for all but one of a real party", () => {
+      expect(stairwayQuorum(4)).toBe(3);
+      expect(stairwayQuorum(3)).toBe(2);
+      expect(stairwayQuorum(2)).toBe(1);
+    });
+
+    it("is trivially met solo (and never asks for 0)", () => {
+      expect(stairwayQuorum(1)).toBe(1);
+      expect(stairwayQuorum(0)).toBe(1);
+    });
+
+    it("never requires the whole party (a lone holdout can't block it)", () => {
+      for (let n = 2; n <= 8; n++) expect(stairwayQuorum(n)).toBeLessThan(n);
+    });
+  });
+
+  describe("vaultChestPoints", () => {
+    it("is the base on floor 1 and scales with depth", () => {
+      expect(vaultChestPoints(1)).toBe(VAULT_CHEST_POINTS);
+      expect(vaultChestPoints(5)).toBe(VAULT_CHEST_POINTS * 5);
+      expect(vaultChestPoints(3, 100)).toBe(300);
+    });
+
+    it("out-pays the M4 chest at the same depth (a jackpot)", () => {
+      expect(vaultChestPoints(4)).toBeGreaterThan(chestPoints(4));
+    });
+  });
+
+  describe("rollVaultRelic", () => {
+    it("rng=0 → first trophy, rng→1 → last trophy, all from the pool", () => {
+      expect(rollVaultRelic(() => 0)).toBe(VAULT_RELICS[0]);
+      expect(rollVaultRelic(() => 0.999)).toBe(VAULT_RELICS[VAULT_RELICS.length - 1]);
+      expect(VAULT_RELICS).toContain(rollVaultRelic(() => 0.5));
     });
   });
 });

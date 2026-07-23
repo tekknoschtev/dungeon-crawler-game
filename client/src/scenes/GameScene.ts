@@ -197,6 +197,16 @@ const LOOT_GLOW_DEPTH = 4;
 const ATTACK_COOLDOWN_MS = 450; // client throttle; mirrors the server cooldown
 const SWING_RADIUS = 26; // world px of the local swing ring (feedback only)
 
+// --- Strange stairway (goldvault detour, special floors) ---------------
+// The second exit that appears on some floors. Deliberately NOT the descent's
+// amber: a violet-gold shimmer reads as "strange" at a glance, so nobody
+// confuses the way down with the way sideways. The server owns presence,
+// position, and the whole gather-to-enter rule — this is render only.
+const STAIRWAY_DEPTH = 4; // same layer as the descent beacon
+const STAIRWAY_COLOR = 0xc08bff; // violet — the "strange" tell
+const STAIRWAY_GOLD = 0xffd65c; // gold accent: where it leads
+const STAIRWAY_GATHER_RADIUS = 28; // px — mirrors the server's STAIRWAY_GATHER_RADIUS (zone ring)
+
 // Rarity → accent color (loot glow), as a Phaser int and a CSS string (HUD).
 const RARITY_COLORS: Record<string, number> = {
   common: 0xb8c0cc,
@@ -343,6 +353,13 @@ interface MapMessage {
   lighting?: "bright" | "dark" | "torchlit"; // "dark"/"torchlit" → render the vision bubble
   biome?: string; // depth biome (M15) — picks the geometry tile sheet
   torches?: { x: number; y: number }[]; // wall-torch tiles (torchlit floors); static light pools
+  // The strange stairway's TILE coords on the floors that have one (special
+  // floors), else null/absent. Gathering a quorum on it detours the party to a
+  // goldvault treasure floor; the live gather counts arrive as synced state.
+  strangeStairway?: { x: number; y: number } | null;
+  // True while the party is IN that vault: the exit here leads back to the floor
+  // they left rather than deeper, so it's labelled as a way back.
+  vaultFloor?: boolean;
 }
 
 /** Per-player visual entity on the client. */
@@ -429,6 +446,22 @@ export class GameScene extends Phaser.Scene {
   // Off-screen wayfinder to the vault (gold), with a countdown chip while sealed.
   private chestArrow?: Phaser.GameObjects.Triangle;
   private chestArrowLabel?: Phaser.GameObjects.Text;
+  // Strange stairway (special floors): the world beacon, the gather-zone ring, a
+  // floating "N/M" + countdown label, and a violet wayfinder that only appears
+  // ONCE someone is gathering — an idle stairway stays something you find, while
+  // a stairway being held calls the rest of the party over to it.
+  private stairwayX = 0;
+  private stairwayY = 0;
+  private stairwayMarker?: Phaser.GameObjects.Container;
+  private stairwayRing?: Phaser.GameObjects.Arc;
+  private stairwayLabel?: Phaser.GameObjects.Text;
+  private stairwayArrow?: Phaser.GameObjects.Triangle;
+  private hasStairway = false;
+  // Like exitDiscovered: on a dark floor the stairway stays hidden until a hero's
+  // light has reached it once. Always true on lit floors.
+  private stairwayDiscovered = false;
+  // True on a vault-detour floor: the exit here goes BACK, not down.
+  private vaultFloor = false;
   // Throttle the depth/heat HUD so we only touch the DOM when a value changes.
   private lastDepthShown = -1;
   private lastHeatShown = -1;
@@ -2151,8 +2184,19 @@ export class GameScene extends Phaser.Scene {
     // on descend), so rebuild the marker each time at the new exit.
     this.exitX = data.exit.x * t + t / 2;
     this.exitY = data.exit.y * t + t / 2;
+    this.vaultFloor = !!data.vaultFloor;
     this.buildExitMarker(t);
     this.exitMarker?.setVisible(this.exitDiscovered); // hidden on dark floors until found
+
+    // Strange stairway (special floors) — most floors have none, so this tears the
+    // previous floor's beacon down and only rebuilds when the server sent one.
+    const sw = data.strangeStairway ?? null;
+    this.hasStairway = sw !== null;
+    if (sw) {
+      this.stairwayX = sw.x * t + t / 2;
+      this.stairwayY = sw.y * t + t / 2;
+    }
+    this.buildStairwayMarker(t);
 
     // Seed the vision so the very first frame (and the descent fade-in) reveals the
     // hero's surroundings instead of flashing the whole floor before going dark.
@@ -2216,6 +2260,80 @@ export class GameScene extends Phaser.Scene {
         .setDepth(HUD_DEPTH)
         .setVisible(false);
     }
+  }
+
+  /**
+   * The strange stairway: the same ladder sprite as the descent, but washed
+   * violet and ringed in gold, with a dashed gather-zone circle drawn at the
+   * server's real radius — so "where do we have to stand" is legible on sight
+   * rather than something the party has to guess at. Torn down and rebuilt each
+   * floor; on floors without one, this just clears the previous floor's beacon.
+   */
+  private buildStairwayMarker(t: number) {
+    this.stairwayMarker?.destroy();
+    this.stairwayMarker = undefined;
+    this.stairwayRing?.destroy();
+    this.stairwayRing = undefined;
+    this.stairwayLabel?.destroy();
+    this.stairwayLabel = undefined;
+    if (!this.hasStairway) {
+      this.stairwayArrow?.setVisible(false);
+      return;
+    }
+
+    // The gather zone, at the exact radius the server counts heroes within.
+    this.stairwayRing = this.add
+      .circle(this.stairwayX, this.stairwayY, STAIRWAY_GATHER_RADIUS, STAIRWAY_COLOR, 0.06)
+      .setStrokeStyle(1, STAIRWAY_COLOR, 0.5)
+      .setDepth(STAIRWAY_DEPTH);
+
+    const glow = this.add.circle(0, 0, t * 0.8, STAIRWAY_COLOR, 0.18);
+    const rim = this.add
+      .circle(0, 0, t * 0.5, STAIRWAY_GOLD, 0)
+      .setStrokeStyle(1, STAIRWAY_GOLD, 0.7);
+    const ladder = this.add
+      .image(0, 0, EXIT_TEXTURE)
+      .setDisplaySize(t, t)
+      .setTint(STAIRWAY_COLOR);
+    this.stairwayMarker = this.add
+      .container(this.stairwayX, this.stairwayY, [glow, rim, ladder])
+      .setDepth(STAIRWAY_DEPTH);
+    // A slower, deeper pulse than the descent's — it should read as odd, not urgent.
+    this.tweens.add({
+      targets: glow,
+      alpha: { from: 0.28, to: 0.08 },
+      scale: 1.15,
+      duration: 1500,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.inOut",
+    });
+
+    // Floating gather readout ("2/3 gathered" → "Descending in 3"), above the tile.
+    this.stairwayLabel = this.add
+      .text(this.stairwayX, this.stairwayY - t, "", {
+        fontFamily: "monospace",
+        fontSize: "11px",
+        color: "#e3c9ff",
+      })
+      .setOrigin(0.5, 1)
+      .setScale(1 / CAMERA_ZOOM)
+      .setDepth(20)
+      .setVisible(false);
+
+    if (!this.stairwayArrow) {
+      this.stairwayArrow = this.add
+        .triangle(0, 0, 0, -11, 9, 9, -9, 9, STAIRWAY_COLOR, 0.95)
+        .setScrollFactor(0)
+        .setDepth(HUD_DEPTH)
+        .setVisible(false);
+    }
+
+    // Dark floors hide it until found (same rule as the ladder); lit floors show
+    // it from arrival — it's meant to be spotted across the room and walked to.
+    this.stairwayDiscovered = !this.darkFloor;
+    this.stairwayMarker.setVisible(this.stairwayDiscovered);
+    this.stairwayRing.setVisible(this.stairwayDiscovered);
   }
 
   /** Update the Floor / heat / score / multiplier readouts (throttled to changes). */
@@ -2294,7 +2412,16 @@ export class GameScene extends Phaser.Scene {
     }
 
     const onExit = Phaser.Math.Distance.Between(me.sprite.x, me.sprite.y, this.exitX, this.exitY) <= 16;
-    if (hint) hint.hidden = !onExit;
+    if (hint) {
+      hint.hidden = !onExit;
+      // In a vault the very same channel takes the room BACK to the floor it left
+      // (same depth) rather than deeper — say so, or holding it reads as a descent.
+      if (onExit) {
+        hint.textContent = this.vaultFloor
+          ? "▲ Hold here to return"
+          : "▼ Hold here to descend";
+      }
+    }
 
     const cam = this.cameras.main;
     const view = cam.worldView;
@@ -2368,6 +2495,65 @@ export class GameScene extends Phaser.Scene {
     } else {
       this.chestArrowLabel!.setVisible(false);
     }
+  }
+
+  /**
+   * Surface the strange stairway's gather-to-enter state (special floors). Reads
+   * the server's synced counts — it never decides anything itself:
+   *  - idle: just the beacon and its zone ring sitting there to be found;
+   *  - someone standing in it: "1/3 gathered", the ring brightens, and a violet
+   *    edge arrow appears for everyone off-screen — the call to come over;
+   *  - quorum met: the countdown replaces the tally and the ring pulses hot.
+   * No new buttons, no HUD panel: it's all on the world object you walk to.
+   */
+  private updateStairwayNudge() {
+    if (!this.hasStairway || !this.stairwayRing || !this.stairwayLabel) {
+      this.stairwayArrow?.setVisible(false);
+      return;
+    }
+    const st = this.room?.state as
+      | { stairwayCount?: number; stairwayNeed?: number; stairwayIn?: number }
+      | undefined;
+    const count = st?.stairwayCount ?? 0;
+    const need = Math.max(1, st?.stairwayNeed ?? 1);
+    const countdown = st?.stairwayIn ?? 0;
+    const counting = countdown > 0;
+    const active = count > 0;
+
+    // Undiscovered on a dark floor: the beacon itself is still hidden, so its
+    // label would just be text floating in the black. The edge arrow below still
+    // points teammates toward whoever is holding it.
+    const shown = this.stairwayDiscovered;
+    if (counting) {
+      this.stairwayLabel.setText(`Entering in ${Math.max(1, Math.ceil(countdown))}`).setVisible(shown);
+      this.stairwayRing.setStrokeStyle(2, STAIRWAY_GOLD, 0.95).setFillStyle(STAIRWAY_GOLD, 0.16);
+    } else if (active) {
+      this.stairwayLabel.setText(`${count}/${need} gathered`).setVisible(shown);
+      this.stairwayRing.setStrokeStyle(2, STAIRWAY_COLOR, 0.8).setFillStyle(STAIRWAY_COLOR, 0.1);
+    } else {
+      this.stairwayLabel.setVisible(false);
+      this.stairwayRing.setStrokeStyle(1, STAIRWAY_COLOR, 0.5).setFillStyle(STAIRWAY_COLOR, 0.06);
+    }
+
+    // The wayfinder only lights up once the stairway is actually being held, so
+    // finding it stays exploration but converging on it doesn't stay a mystery.
+    const arrow = this.stairwayArrow;
+    if (!arrow) return;
+    const cam = this.cameras.main;
+    const view = cam.worldView;
+    if (!active || view.contains(this.stairwayX, this.stairwayY)) {
+      arrow.setVisible(false);
+      return;
+    }
+    const cx = cam.width / 2;
+    const cy = cam.height / 2;
+    const sx = ((this.stairwayX - view.x) / view.width) * cam.width;
+    const sy = ((this.stairwayY - view.y) / view.height) * cam.height;
+    const ang = Math.atan2(sy - cy, sx - cx);
+    arrow
+      .setVisible(true)
+      .setPosition(cx + Math.cos(ang) * (cx - 66), cy + Math.sin(ang) * (cy - 66))
+      .setRotation(ang + Math.PI / 2);
   }
 
   /** Add one map tile image to the map layer and return it. Geometry draws
@@ -2569,6 +2755,18 @@ export class GameScene extends Phaser.Scene {
       this.exitDiscovered = true;
       this.exitMarker?.setVisible(true);
     }
+
+    // The strange stairway is a find, so a dark floor keeps it hidden on the same
+    // terms as the ladder — light has to reach it once, then it stays revealed.
+    if (
+      this.hasStairway &&
+      !this.stairwayDiscovered &&
+      this.litAt(this.stairwayX, this.stairwayY) > LIGHT_VISIBLE_AT
+    ) {
+      this.stairwayDiscovered = true;
+      this.stairwayMarker?.setVisible(true);
+      this.stairwayRing?.setVisible(true);
+    }
   }
 
   update(time: number, delta: number) {
@@ -2598,6 +2796,7 @@ export class GameScene extends Phaser.Scene {
     this.updateRunHud();
     this.updateExitNudge();
     this.updateChestNudge();
+    this.updateStairwayNudge();
     this.updateReviveHint();
     // Run last so it has final say over what's visible this frame (it overrides the
     // per-entity show/hide above for anything outside the light). No-op when bright.

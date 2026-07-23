@@ -1,6 +1,6 @@
 import { Room, Client, matchMaker } from "colyseus";
 import { DungeonState, Player, Mob, Loot, DeathMarker, Chest, Crate, Bomb } from "./schema/DungeonState";
-import { loadMap, LoadedMap, TILE, BIOMES, Biome } from "./map";
+import { loadMap, LoadedMap, TILE, BIOMES, Biome, StairwayMode } from "./map";
 import {
   PLAYER_SPEED,
   PLAYER_RADIUS,
@@ -41,6 +41,8 @@ import {
   BOMB_KNOCKBACK,
   BOMB_STUN,
   GOLDVAULT_TREASURE_COUNT,
+  STAIRWAY_GATHER_RADIUS,
+  STAIRWAY_COUNTDOWN,
 } from "./tuning";
 import {
   dist,
@@ -74,6 +76,10 @@ import {
   chestPoints,
   rollRelic,
   rollTreasure,
+  stairwayQuorum,
+  vaultMobTarget,
+  vaultChestPoints,
+  rollVaultRelic,
   type AggroCandidate,
   type Vec,
 } from "./logic";
@@ -217,6 +223,20 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
   // it. The door tile (when there is one) is sealed in `collision`, so it's
   // excluded from spawns automatically; null between placements.
   private vaultChestTile: Vec | null = null;
+  // --- Strange stairway detour (special floors) ---
+  // True while the party is inside a goldvault vault floor reached through a
+  // strange stairway. Flips the exit from "descend" to "return", swaps the mob
+  // population for the lighter vault target, and picks the vault reward payout.
+  private inVault = false;
+  // The floor the detour started on — the party is returned to exactly this depth
+  // (the run's one shared floor never branches; the vault is a side trip, not a
+  // fork). Meaningless while not inVault.
+  private vaultReturnDepth = 0;
+  // The origin floor's `floorStartAt`, stashed on entry and restored on return.
+  // This is the whole cost of the detour: the pressure clock is never paused, so
+  // the floor the party comes back to has been flooding the entire time they were
+  // counting coins (see docs/special-floors-plan.md — "the hotter return").
+  private vaultReturnFloorStart = 0;
 
   async onCreate(options: { code?: string } = {}) {
     this.state = new DungeonState();
@@ -355,11 +375,33 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
    * collision + the walkable-tile cache, clears the old floor's mobs/loot, resets
    * the pressure ramp, repositions any players to the new spawns, seeds the calm
    * starting population, and broadcasts the new map to clients.
+   *
+   * `opts.vault` builds the strange-stairway VAULT floor instead: same displayed
+   * depth (the detour never changes which floor the run is on), but its own
+   * seed, a forced goldvault kit, an immediately-openable reward chest in place
+   * of the timed M4 vault, and a lighter mob population. `opts.suppressStairway`
+   * withholds the strange stairway from the generated floor — used for the vault
+   * itself (no nested vaults) and for the floor a party is returned to, so the
+   * detour is spent rather than farmable in a loop.
+   *
+   * `opts.floorStartAt` back-dates the pressure ramp instead of resetting it, so
+   * the floor is entered already part-way up its heat curve — and, crucially, is
+   * POPULATED to match on arrival rather than filling in over the next half
+   * minute. That's what makes a vault return land in a floor that genuinely
+   * flooded while the party was away, rather than one that merely starts filling.
    */
-  private enterFloor(depth: number) {
+  private enterFloor(
+    depth: number,
+    opts: { vault?: boolean; suppressStairway?: boolean; floorStartAt?: number } = {}
+  ) {
+    const vault = opts.vault ?? false;
+    this.inVault = vault;
     this.state.depth = depth;
-    // Mix baseSeed with depth so each floor has its own reproducible layout.
-    const seed = (this.baseSeed ^ Math.imul(depth, 0x9e3779b1)) >>> 0;
+    // Mix baseSeed with depth so each floor has its own reproducible layout. The
+    // vault floor hangs off the same (baseSeed, depth) pair but is salted apart,
+    // so it's just as reproducible — and a daily seed replays the detour exactly.
+    let seed = (this.baseSeed ^ Math.imul(depth, 0x9e3779b1)) >>> 0;
+    if (vault) seed = (seed ^ 0x5a17_c0de) >>> 0;
     this.state.seed = seed;
     // Dev/testing override: DUNGEON_LIGHTING=dark|bright|torchlit forces every
     // floor's mode so the vision rendering is reproducible without reroll-fishing.
@@ -372,9 +414,27 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     // stone|overgrown|crypt|ember forces every floor's kit so a biome can be
     // eyeballed on floor 1 without descending to its band. Unset in prod.
     const fb = process.env.DUNGEON_BIOME;
-    const forcedBiome = (BIOMES as readonly string[]).includes(fb ?? "") ? (fb as Biome) : undefined;
-    this.map = loadMap(seed, depth, forcedLighting, forcedBiome);
-    console.log(`Floor ${depth} — preset: ${this.map.preset}, lighting: ${this.map.lighting}, biome: ${this.map.biome} (seed ${seed})`);
+    const overrideBiome = (BIOMES as readonly string[]).includes(fb ?? "") ? (fb as Biome) : undefined;
+    // The vault floor IS the goldvault kit — that's what lights up the treasury
+    // floorplan and the treasure scatter below, both already built and until now
+    // reachable only through the dev override.
+    const forcedBiome: Biome | undefined = vault ? "goldvault" : overrideBiome;
+    // Strange stairway: suppressed outright on the vault floor and on a floor a
+    // party was just returned to (see enterVault / returnFromVault). Otherwise the
+    // real seeded rule — unless the DUNGEON_STAIRWAY dev override forces one onto
+    // every eligible floor (including floor 1) so the detour can be exercised
+    // without reroll-fishing for the ~1-in-4 roll. Unset in prod.
+    const stairwayMode: StairwayMode =
+      vault || opts.suppressStairway
+        ? "never"
+        : process.env.DUNGEON_STAIRWAY === "always"
+          ? "always"
+          : "auto";
+    this.map = loadMap(seed, depth, forcedLighting, forcedBiome, stairwayMode);
+    console.log(
+      `Floor ${depth}${vault ? " [vault detour]" : ""} — preset: ${this.map.preset}, lighting: ${this.map.lighting}, biome: ${this.map.biome}` +
+        `${this.map.strangeStairway ? ", strange stairway" : ""} (seed ${seed})`
+    );
 
     // Bake props into a collision-only grid (walls + prop tiles solid, including
     // breakable ones — they start solid and are removed from collision on break).
@@ -383,8 +443,18 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
 
     // Arm a fresh vault: seals its door tile in `collision` (so the chamber is
     // unreachable below) and records the chest tile to keep mobs/loot off it.
+    // On a vault-detour floor the timed M4 chest is replaced by a reward chest
+    // that's already open for business — a 90s unlock would fight the quick
+    // in-and-out rhythm the detour is built around.
     this.state.chests.clear();
-    this.placeVault(depth);
+    if (vault) this.placeVaultReward();
+    else this.placeVault(depth);
+
+    // Reset the gather-to-enter readout for the new floor (updateStairway
+    // repopulates it each tick while a stairway exists here).
+    this.state.stairwayCount = 0;
+    this.state.stairwayNeed = 0;
+    this.state.stairwayIn = 0;
 
     // Populate breakable crates as synced entities (not in the static map payload).
     this.state.crates.clear();
@@ -426,11 +496,15 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     this.bombOwners.clear();
     this.state.markers.clear();
     this.markerIds = [];
-    this.floorStartAt = this.now;
+    // Normally the ramp restarts here — that reset IS the relief of descending.
+    // A vault return instead restores the stamp it left with, so the clock reads
+    // as if it never paused (see returnFromVault).
+    this.floorStartAt = opts.floorStartAt ?? this.now;
     this.nextMobSpawnAt = this.now;
     this.spawnSuppressedUntil = this.now; // no carried-over lull on a fresh floor
     this.descendProgress = 0;
-    this.state.heat = 0;
+    const heat = heatLevel(this.now - this.floorStartAt);
+    this.state.heat = heat;
 
     // Move everyone to the new spawns (a no-op on the very first floor — players
     // join afterwards). HP/buffs carry across; the pressure reset is the relief.
@@ -468,8 +542,11 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       }
     }
 
-    // Seed the calm starting population so the floor isn't empty on arrival.
-    const target = targetMobCount(0, depth);
+    // Seed the starting population so the floor isn't empty on arrival — at the
+    // floor's ACTUAL heat, which is 0 for a normal descent (calm) but already hot
+    // for a vault return, landing the party straight into the flooded floor they
+    // paid for. The vault itself uses its lighter target (see mobTarget).
+    const target = this.mobTarget(heat);
     for (let n = 0; n < target; n++) this.spawnMob();
 
     // Push the new geometry to everyone (no-op when no one's connected yet).
@@ -517,6 +594,46 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       chest.doorY = -1;
       this.vaultChestTile = tile;
     }
+    this.state.chests.set(VAULT_ID, chest);
+  }
+
+  /**
+   * How many live mobs this floor wants right now. A vault-detour floor uses the
+   * lighter, depth-bonus-free target so it reads as a smash-and-grab: the mobs are
+   * still depth-scaled in HP/damage (spawnMob handles that), there are just far
+   * fewer of them. The detour's price is the flooded floor waiting on the way out,
+   * not a second pressure cooker on the way in.
+   */
+  private mobTarget(heat: number): number {
+    return this.inVault ? vaultMobTarget(heat) : targetMobCount(heat, this.state.depth);
+  }
+
+  /**
+   * Place the vault-detour floor's reward chest: unlike the M4 vault it arrives
+   * UNLOCKED — no door, no countdown, no key hunt — so a single swing cracks it
+   * (the existing attack path already chips any unlocked chest in range). It sits
+   * deep in the vault, away from the arrival spawns and the return exit, so the
+   * party still has to cross the treasury to claim it. Its payout is the gilded
+   * one (see openChest).
+   */
+  private placeVaultReward() {
+    const chest = new Chest();
+    chest.locked = false; // open for business the moment you reach it
+    chest.unlockIn = 0;
+    chest.doorX = -1; // no gate to render
+    chest.doorY = -1;
+    chest.hp = CHEST_HP;
+    chest.maxHp = CHEST_HP;
+
+    const avoid: Vec[] = this.map.spawns.map((s) => ({
+      x: Math.floor(s.x / TILE),
+      y: Math.floor(s.y / TILE),
+    }));
+    avoid.push({ x: this.map.exit.x, y: this.map.exit.y });
+    const tile = this.farthestFloorTile(avoid);
+    chest.x = tile.x * TILE + TILE / 2;
+    chest.y = tile.y * TILE + TILE / 2;
+    this.vaultChestTile = tile; // keeps mob/loot/treasure spawns off it
     this.state.chests.set(VAULT_ID, chest);
   }
 
@@ -593,15 +710,23 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
    * Crack the vault open: the depth-scaled mega-points (riding the heat
    * multiplier, un-banked like all floor score) go to the whole party split
    * evenly; the heal + buff + relic go to the opener who braved it.
+   *
+   * Inside a strange-stairway vault the same swing cracks that floor's REWARD
+   * chest instead — a fatter jackpot and a unique gilded trophy in place of the
+   * procedural relic, since reaching it cost the party a whole detour.
    */
   private openChest(openerId: string) {
     const chest = this.state.chests.get(VAULT_ID);
     if (!chest) return;
+    const isVaultReward = this.inVault;
 
     // Points → party, split evenly (the party total rises by ~the chest amount).
     // Each share is rounded so scores stay whole on the HUD (the total can differ
     // from `pts` by < n points — immaterial against a depth-scaled jackpot).
-    const pts = Math.round(chestPoints(this.state.depth) * scoreMultiplier(this.state.heat) * this.floorScoreMult());
+    const base = isVaultReward
+      ? vaultChestPoints(this.state.depth)
+      : chestPoints(this.state.depth);
+    const pts = Math.round(base * scoreMultiplier(this.state.heat) * this.floorScoreMult());
     const n = this.state.players.size;
     if (n > 0) {
       const each = Math.round(pts / n);
@@ -622,7 +747,11 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       opener.attackBuff = Math.max(opener.attackBuff, CHEST_BUFF_DURATION);
       opener.defenseBuff = Math.max(opener.defenseBuff, CHEST_BUFF_DURATION);
 
-      const name = rollRelic(Math.random, this.state.depth);
+      // The trophy: a unique gilded name from the goldvault pool when this is the
+      // vault's reward chest, otherwise the usual procedural relic.
+      const name = isVaultReward
+        ? rollVaultRelic()
+        : rollRelic(Math.random, this.state.depth);
       opener.relics.push(name);
       this.broadcast("relic", { name, who: opener.name });
 
@@ -713,6 +842,13 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       lighting: this.map.lighting, // "bright" | "dark" | "torchlit" — drives the client vision
       biome: this.map.biome, // depth biome (M15) — the client picks its tile sheet by this
       torches: this.map.torches, // wall-torch tiles (torchlit floors only; [] otherwise)
+      // The strange stairway's tile (special floors), or null on the floors — most
+      // of them — without one. Static per floor, so it rides the map message like
+      // the exit; only the live gather counts are synced state.
+      strangeStairway: this.map.strangeStairway,
+      // True on a vault-detour floor: the client labels the exit a way BACK rather
+      // than a way down (it returns the room to the floor it left, same depth).
+      vaultFloor: this.inVault,
     };
   }
 
@@ -720,6 +856,10 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
    * Descent channel: while any living hero stands on the exit, charge a short
    * timer; when it fills, the whole party drops to the next floor. Stepping off
    * cancels it. Co-op-friendly — anyone can initiate, nobody has to clear first.
+   *
+   * On a vault-detour floor the very same channel is the way BACK: it returns the
+   * room to the floor it left instead of descending (see returnFromVault). One
+   * mechanic, two meanings — nothing new for a player to learn.
    */
   private updateDescent(dt: number) {
     if (this.state.phase !== "playing") return; // run's over; no descending
@@ -749,6 +889,17 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       // reposition is unseen. enterFloor resets the channel + ramp.
       this.descending = true;
       this.broadcast("descend");
+
+      // In the vault this channel means "take us back", not "take us down": same
+      // depth, nothing banked, and the origin floor's un-paused heat restored.
+      if (this.inVault) {
+        this.clock.setTimeout(() => {
+          this.returnFromVault();
+          this.descending = false;
+        }, DESCEND_FADE_MS);
+        return;
+      }
+
       const fromDepth = this.state.depth;
       this.clock.setTimeout(() => {
         this.state.players.forEach((p, sid) => {
@@ -786,6 +937,91 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
       if (ai) ai.stunnedUntil = Math.max(ai.stunnedUntil, this.now + EXIT_PULSE_STAGGER);
     });
     this.broadcast("exit_pulse", { x: ex, y: ey });
+  }
+
+  // --- Strange stairway → goldvault detour (special floors) --------------
+
+  /**
+   * Gather-to-enter. While a QUORUM of the living party stands in the strange
+   * stairway's zone, run a short countdown; when it lands, the whole room is
+   * detoured into a goldvault vault floor together. Anyone stepping out (or going
+   * down) before it lands breaks quorum and resets the countdown, so a party can
+   * always back out — but a single AFK / dead / holdout hero can never veto it,
+   * because quorum is "all but one" (see stairwayQuorum).
+   *
+   * Everyone transitions, gathered or not: the run has exactly ONE shared floor,
+   * and leaving a straggler behind on an abandoned one would break that invariant
+   * outright. The countdown is what makes that fair — it's the window to object by
+   * stepping in, or to just come along.
+   */
+  private updateStairway(dt: number) {
+    if (this.state.phase !== "playing") return; // run's over
+    if (this.descending) return; // a transition is already scheduled
+    if (this.inVault) return; // no nested vaults
+    const sw = this.map.strangeStairway;
+    if (!sw) return; // most floors have none
+
+    const sx = sw.x * TILE + TILE / 2;
+    const sy = sw.y * TILE + TILE / 2;
+    let living = 0;
+    let gathered = 0;
+    this.state.players.forEach((p) => {
+      if (p.hp <= 0) return; // the downed can't hold the circle...
+      living++;
+      if (dist(p.x, p.y, sx, sy) <= STAIRWAY_GATHER_RADIUS) gathered++;
+    });
+    if (living === 0) return; // ...and a wholly-downed party isn't gathering anything
+
+    const need = stairwayQuorum(living);
+    this.state.stairwayCount = gathered;
+    this.state.stairwayNeed = need;
+
+    if (gathered < need) {
+      this.state.stairwayIn = 0; // quorum broke — the countdown resets, not pauses
+      return;
+    }
+    // Quorum standing: start the countdown on the tick it's first met, then run it.
+    if (this.state.stairwayIn <= 0) this.state.stairwayIn = STAIRWAY_COUNTDOWN;
+    this.state.stairwayIn = Math.max(0, this.state.stairwayIn - dt);
+    if (this.state.stairwayIn <= 0) this.enterVault();
+  }
+
+  /**
+   * Take the strange stairway: fade the room out (reusing the descent fade) and
+   * swap the whole party into the vault floor under cover of it. The origin floor's
+   * pressure stamp is stashed rather than reset — the clock keeps running the whole
+   * time they're inside, which is the entire cost of the trip (see returnFromVault).
+   */
+  private enterVault() {
+    this.descending = true;
+    this.broadcast("descend");
+    this.vaultReturnDepth = this.state.depth;
+    this.vaultReturnFloorStart = this.floorStartAt;
+    const depth = this.state.depth;
+    this.clock.setTimeout(() => {
+      this.enterFloor(depth, { vault: true });
+      this.descending = false;
+    }, DESCEND_FADE_MS);
+  }
+
+  /**
+   * Leave the vault the way you came: the whole room lands back on the floor it
+   * detoured from, at the SAME depth, to descend normally. The layout is
+   * regenerated — deterministic from (baseSeed, depth), so it's the identical
+   * place — but repopulated, and the restored pressure stamp means the heat picks
+   * up where an un-paused clock would have carried it. That's the price: you come
+   * back to a floor that has been filling up the whole time. The stairway itself is
+   * spent (suppressed), so the vault can't be farmed in a loop.
+   *
+   * Nothing is banked here — the treasure just hauled out rides un-banked in score
+   * until the party actually descends, so a wipe on the flooded return floor still
+   * forfeits it. The risk is paid on the way out, not on the way in.
+   */
+  private returnFromVault() {
+    this.enterFloor(this.vaultReturnDepth, {
+      suppressStairway: true,
+      floorStartAt: this.vaultReturnFloorStart,
+    });
   }
 
   // --- Combat ------------------------------------------------------------
@@ -1233,7 +1469,7 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     // higher the target and the faster the top-ups. Frozen once the run is over.
     if (
       this.state.phase === "playing" &&
-      this.state.mobs.size < targetMobCount(heat, this.state.depth) &&
+      this.state.mobs.size < this.mobTarget(heat) &&
       this.now >= this.nextMobSpawnAt &&
       this.now >= this.spawnSuppressedUntil // M9: recent kills hold the refill off
     ) {
@@ -1247,8 +1483,11 @@ export class DungeonRoom extends Room<{ state: DungeonState }> {
     // Tick the vault's unlock countdown (opens its door when it lands).
     this.updateChest(dt);
 
-    // Let the party descend by holding the exit.
+    // Let the party descend by holding the exit (or, in the vault, head back).
     this.updateDescent(dt);
+
+    // Tick the strange stairway's gather-to-enter countdown (special floors).
+    this.updateStairway(dt);
 
     // End the run once nobody can recover: every hero down, none with a life left
     // to self-respawn (a downed hero with a life can still spend it; a standing one

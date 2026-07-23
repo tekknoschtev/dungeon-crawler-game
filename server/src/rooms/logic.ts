@@ -45,6 +45,10 @@ import {
   SCORE_DEPTH_BONUS,
   LOOT_SCORE,
   CHEST_BASE_POINTS,
+  VAULT_MOB_BASE,
+  VAULT_MOB_MAX,
+  VAULT_CHEST_POINTS,
+  VAULT_RELICS,
   RELIC_RARITIES,
   RELIC_ADJECTIVES,
   RELIC_NOUNS,
@@ -420,6 +424,21 @@ export function targetMobCount(
   return Math.min(hardCap, Math.round(want));
 }
 
+/**
+ * Live mob population a strange-stairway VAULT floor wants: depth-scaled mobs are
+ * still a real threat (scaleMobHp/Damage handle that on spawn), but the *count*
+ * stays a light, non-ramping smash-and-grab — a heat lerp from base to max with
+ * NO per-depth population bonus, so a deep vault isn't a wall of bodies. The cost
+ * of the detour is the flooded return floor, not a pressure cooker inside. Pure.
+ */
+export function vaultMobTarget(
+  heat: number,
+  base: number = VAULT_MOB_BASE,
+  max: number = VAULT_MOB_MAX
+): number {
+  return Math.round(lerp(base, max, clamp01(heat)));
+}
+
 /** Seconds between top-up spawns: long when calm, short when hot. */
 export function spawnInterval(
   heat: number,
@@ -527,4 +546,34 @@ export function rollRelic(rng: Rng = Math.random, depth: number = 1): string {
   let name = `${adj} ${noun}`;
   if (tier >= RELIC_SUFFIX_MIN_TIER) name += ` of the ${pick(RELIC_SUFFIXES)}`;
   return name;
+}
+
+// --- Strange stairway / vault detour (special floors) ------------------
+// Pure helpers for the goldvault strange-stairway feature: the gather-to-enter
+// quorum, the vault reward chest's jackpot, and its unique trophy. See
+// docs/special-floors-plan.md and DungeonRoom's updateStairway / openChest.
+
+/**
+ * How many players must gather in the stairway zone to start the entry countdown:
+ * "all but one" of the living party — max(1, living - 1). Holdout-proof (a lone
+ * AFK/dead/refusing player can never block the vault, since they're the "one" left
+ * out), while a real group still has to converge (4 living → 3 must gather). Solo
+ * and duo are trivially met. Pure; the room feeds in the living-player count.
+ */
+export function stairwayQuorum(livingCount: number): number {
+  return Math.max(1, livingCount - 1);
+}
+
+/** Base jackpot a vault reward chest pays the party (before the heat multiplier); deeper = grander. */
+export function vaultChestPoints(depth: number, base: number = VAULT_CHEST_POINTS): number {
+  return base * depth;
+}
+
+/**
+ * Roll a unique gilded trophy for the vault-chest opener from the hand-picked
+ * goldvault pool (distinct from the procedural M4 relic names) — score-screen
+ * flavor only, like a relic. Deterministic for a given rng.
+ */
+export function rollVaultRelic(rng: Rng = Math.random, pool: readonly string[] = VAULT_RELICS): string {
+  return pool[Math.min(pool.length - 1, Math.floor(rng() * pool.length))];
 }

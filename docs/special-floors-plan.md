@@ -60,16 +60,36 @@ scattered score-loot, riding the existing loot/haul machinery.
 - **Determinism.** Stairway presence + location are seeded; the treasure spawn
   is already grid/seed-deterministic.
 
-**Open questions**
-- Quorum fraction (half? all-but-one?) and countdown length.
-- Players not in the zone when the countdown fires — left behind on the floor,
-  or auto-pulled in? (Recommend the whole room transitions together to preserve
-  the "one shared floor" invariant; the countdown is what protects against a
-  lone holdout.)
-- Are the vault floor's mobs scaled to current depth, or is it a lighter "loot
-  room"? Does the vault carry its own vault-chest/key, or treasure only?
-- Rarity of the stairway; interaction with the floor's normal vault (skip it?
-  keep both?).
+**Resolved + BUILT** (the open questions below were settled with the owner and
+shipped; kept here as the record of *why*):
+
+- **Quorum = "all but one"** of the living party, `max(1, living - 1)`. Never the
+  whole party, so a lone AFK/dead/holdout hero can't veto it — they're the "one".
+  Solo and duo are trivially met; a four-hero party genuinely has to converge.
+- **Countdown = 3s**, and it *resets* (not pauses) the instant quorum breaks, so
+  a party can always back out by stepping off.
+- **The whole room transitions**, gathered or not — the run has exactly one
+  shared floor, and stranding a hero on an abandoned one would break that
+  outright. The countdown is the window to object by stepping in, or just come.
+- **Vault mobs: depth-scaled, lighter count.** HP/damage scale with the current
+  depth (they're a real threat), but the population uses its own target with no
+  per-depth bonus (`vaultMobTarget`, 4→8) so it reads as a smash-and-grab. The
+  price of the detour is the flooded return, not a second pressure cooker inside.
+- **Vault loot: treasure + one immediately-openable reward chest.** No key hunt,
+  no timed unlock (a 90s wait fights the in-and-out rhythm) — it arrives unlocked
+  and a single swing cracks it, paying a fatter jackpot (`vaultChestPoints`) and a
+  unique gilded trophy from a hand-picked pool (`VAULT_RELICS`) instead of the
+  procedural M4 relic.
+- **Rarity ~1 in 4** floors, never floor 1 (the on-ramp teaches the normal descent
+  first). `DUNGEON_STAIRWAY=always` forces it for testing.
+- **The floor's normal vault is simply left behind** when you detour. The return
+  regenerates the floor — deterministic from (seed, depth), so it's the identical
+  place — which re-arms a fresh M4 vault. The stairway itself is *spent* on the
+  return, so the vault can't be farmed in a loop.
+- **Determinism:** presence + position are drawn from a dedicated RNG stream
+  (`seed ^ hash("stairway")`), the same trick the biome quirks use, so adding the
+  feature could not shift a single pre-existing layout or lighting roll
+  (regression-pinned in `map.test.ts`).
 
 ---
 
@@ -139,9 +159,9 @@ learned — a healthy mastery curve).
 
 ## Phasing
 
-1. **Goldvault strange stairway** — turnkey content is already built; the work
-   is the trigger + gather-to-enter + vault-return plumbing. Smallest, highest
-   payoff, cashes in the floorplans milestone directly.
+1. ~~**Goldvault strange stairway**~~ — **SHIPPED.** The trigger,
+   gather-to-enter, and vault-return plumbing are built; the treasury floorplan
+   and treasure scatter light up for free, exactly as predicted.
 2. **Frost sliding** — self-contained physics; needs a trigger decision and real
    playtest tuning. Mid-size.
 3. **Flesh** — content project (mobs / AI / loot) that also *depends on* the
